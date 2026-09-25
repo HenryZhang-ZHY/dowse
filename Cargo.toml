@@ -1,0 +1,28 @@
+[package]
+name = "tgrep-gpui"
+version = "0.1.0"
+edition = "2024"
+description = "A cross-platform desktop code search tool powered by tgrep and GPUI"
+license = "MIT"
+
+[[bin]]
+name = "tgrep-gpui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+globset = "0.4"
+gpui-kit = "0.6.6"
+memchr = "2"
+notify = "7"
+rayon = "1"
+regex = "1"
+tgrep-core = { git = "https://github.com/microsoft/tgrep", rev = "69e4fd05674403baf3e482a597cb2d24fbedc581" }
+which = "7"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev.package."*"]
+opt-level = 2
