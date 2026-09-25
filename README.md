@@ -2,43 +2,61 @@
 
 A cross-platform desktop code search tool: [tgrep](https://github.com/microsoft/tgrep)'s
 trigram index as the engine, [GPUI](https://github.com/zed-industries/zed) (through
-[GPUI Kit](https://gpui-kit.com)) as the UI. The scope of the first version is
-[grep.app](https://grep.app): one search box, a few toggles, facet filters, and
-results as code snippets.
+[GPUI Kit](https://gpui-kit.com)) as the UI. It searches across many repositories at
+once, in the spirit of [grep.app](https://grep.app) and GitHub code search, but over
+the clones on your own disk: the mirrors you keep on `main` and the working copies
+you develop in.
 
 ## Features
 
+- **Many repositories, one search box.** Add repositories one by one, or pick a folder
+  that holds several git repositories to add them all. Results show which repository
+  and branch each file comes from.
+- **Tags choose what to search.** Tag repositories freely: plain tags such as `mirror`
+  or `dev`, or `key:value` tags such as `owner:alice` or `project:billing`. Every
+  repository is also tagged `branch:<name>` with the branch it has checked out, which
+  updates when you switch. The scope bar above the results picks the tags to search:
+  tags in one group are alternatives (`owner:alice` or `owner:bob`), and groups narrow
+  each other (`dev` and `owner:alice`). The scope is remembered between sessions.
+- **Facets narrow the results** without changing the scope: repository, branch, each
+  tag group, language and top-level directory, each counted under the others'
+  filters, as on grep.app.
 - **Search as you type** with toggles for match case (`Alt+C`), whole word (`Alt+W`)
   and regular expression (`Alt+R`). On macOS the shortcuts are `Cmd+Alt+C/W/R`.
 - **Path filter**: space-separated terms. `src` keeps paths containing `src`, `*.rs`
   keeps matching globs, and `!tests` or `-*.md` drops paths.
-- **Facets** for language and top-level directory, each counted under the other
-  facet's filter, as on grep.app.
 - **Results as snippets**: every match is highlighted, with one line of context. Long
   files collapse to their first matches ("Show N more matches").
 - **Open in your editor**: click a line. VS Code, Cursor, Zed or Sublime Text is used
   when found on `PATH`, otherwise the system default application. Set
   `TGREP_GPUI_EDITOR` to choose, for example `code -g {file}:{line}` or
   `nvim-qt +{line} {file}`.
-- **Shares the index with the tgrep CLI**. The index lives in `<folder>/.tgrep`, the
-  same place `tgrep index` and `tgrep serve` use. Opening a folder without an index
-  builds one in the background; searches scan the folder until it is ready.
-- **Stays fresh between builds**. A file watcher tracks files changed since the last
-  build, and searches read them directly. After 2,000 changes the index is rebuilt
-  automatically; `Ctrl+Shift+R` rebuilds on demand. Rebuilds happen in a staging
-  directory, so searching keeps working while one runs.
-- Light and dark themes, recent folders, `Ctrl+O` to open a folder, `Ctrl+F`/`Ctrl+K`
-  to focus the search box, `Ctrl+P` for the path filter.
+- **Shares indexes with the tgrep CLI**. Each repository's index lives in its
+  `.tgrep` directory, the same place `tgrep index` and `tgrep serve` use. A repository
+  without an index gets one in the background, one build at a time; until then its
+  files are scanned.
+- **Stays fresh between builds**. A file watcher per repository tracks files changed
+  since its last build, and searches read them directly, so a `git pull` in a mirror
+  or an edit in a working copy shows up right away. After 2,000 changes a repository is
+  re-indexed automatically. Rebuilds happen in a staging directory, so searching keeps
+  working while one runs.
+- Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
+  page, `Ctrl+F`/`Ctrl+K` focus the search box, `Ctrl+P` the path filter, and
+  `Ctrl+Shift+R` rebuilds the indexes in scope.
 
 ## Build and run
 
 Requires a recent stable Rust (the repository's `mise.toml` pins `latest`).
 
 ```bash
-cargo run --release -- path/to/repo
+cargo run --release -- path/to/repo path/to/folder-of-repos
 ```
 
-Without an argument, the app opens on a welcome screen with recent folders.
+Folders given on the command line are added to the saved repositories. The list,
+tags and scope are kept in `repos.json` under the user configuration directory
+(`%APPDATA%\tgrep-gpui` on Windows, `~/.config/tgrep-gpui` on Linux,
+`~/Library/Application Support/tgrep-gpui` on macOS). Set `TGREP_GPUI_CONFIG_DIR`
+to keep it elsewhere.
 
 On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see the
 [Zed Linux build notes](https://github.com/zed-industries/zed/blob/main/docs/src/development/linux.md).
@@ -47,8 +65,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine, a library with no UI dependency. `workspace.rs` opens, builds and publishes the tgrep index; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through the index and matches lines in parallel; `watch.rs` tracks changed files. |
-| `src/ui/` | The GPUI view: `app.rs` holds state and behaviour, `render.rs` the layout. |
+| `src/engine/` | The search engine, a library with no UI dependency. `workspace.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `registry.rs` saves the repository list; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. |
+| `src/ui/` | The GPUI view: `app.rs` holds the search state, `repos.rs` the repositories and their indexes, `render.rs` the search page and `repos_page.rs` the repositories page. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 
@@ -56,10 +74,11 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 1. The query becomes a regex (literal text is escaped; whole word adds `\b`) and a
    tgrep trigram plan.
-2. The plan selects candidate files from the index. Files the watcher saw change are
-   added, and the path filter is applied.
-3. Candidates are read and matched in path-ordered parallel chunks. Once about 20,000
-   matching lines are found, the rest are skipped and the summary says so.
+2. For every repository in scope, the plan selects candidate files from its index.
+   Files the watcher saw change are added, and the path filter is applied.
+3. Candidates are read and matched in ordered parallel chunks, repository by
+   repository. Once about 20,000 matching lines are found, the rest are skipped and
+   the summary says so.
 
 On a 42,000-file tree (1.3 GB of crate sources), the index builds in about 6 s and typical
 queries finish in 20–60 ms.

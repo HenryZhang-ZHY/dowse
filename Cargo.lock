@@ -6706,6 +6706,8 @@ dependencies = [
  "notify",
  "rayon",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
  "tgrep-core",
  "which 7.0.3",

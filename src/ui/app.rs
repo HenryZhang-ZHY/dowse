@@ -1,4 +1,6 @@
-//! State and behaviour of the main view. Rendering lives in `render.rs`.
+//! State and behaviour of the main view: the query, running searches over the
+//! repositories in scope, and facet filtering of the results. Repository
+//! management lives in `repos.rs`; rendering in `render.rs` and `repos_page.rs`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -11,30 +13,35 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
+use super::repos::RepoState;
 use super::{
-    FocusPathFilter, FocusSearch, OpenFolder, RebuildIndex, ToggleCaseSensitive, ToggleRegex,
-    ToggleTheme, ToggleWholeWord,
+    AddRepository, FocusPathFilter, FocusSearch, RebuildIndex, ShowRepositories,
+    ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
 };
 use crate::editor::{self, Launch};
-use crate::recent;
+use tgrep_gpui::engine::facets::{FacetFilter, FacetKind, Facets};
 use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
-use tgrep_gpui::engine::search::{
-    self, FacetFilter, Facets, FileMatch, SearchLimits, SearchOutcome,
-};
-use tgrep_gpui::engine::watch::ChangeTracker;
-use tgrep_gpui::engine::workspace::{Corpus, IndexStatus, Workspace};
+use tgrep_gpui::engine::registry::Registry;
+use tgrep_gpui::engine::repo::Scope;
+use tgrep_gpui::engine::search::{self, FileMatch, SearchLimits, SearchOutcome};
 
 /// Pause after a keystroke before searching, so typing a word runs one search.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);
-/// How often the status bar picks up the watcher's changed-file count.
-const CHANGE_POLL: Duration = Duration::from_secs(2);
-/// Past this many changed files, reading them all on every search costs more
-/// than re-indexing, so the index is rebuilt in the background.
-const AUTO_REINDEX_CHANGES: usize = 2_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Page {
+    Search,
+    Repositories,
+}
 
 pub struct SearchApp {
-    pub(super) folder: Option<Folder>,
-    pub(super) recent: Vec<PathBuf>,
+    pub(super) page: Page,
+    pub(super) registry: Registry,
+    /// Set when the saved registry could not be read, so it is never overwritten.
+    pub(super) registry_locked: bool,
+    /// Sorted by name.
+    pub(super) repos: Vec<RepoState>,
+    pub(super) scope: Scope,
     pub(super) search_input: Entity<InputState>,
     pub(super) path_input: Entity<InputState>,
     pub(super) case_sensitive: bool,
@@ -42,36 +49,16 @@ pub struct SearchApp {
     pub(super) regex: bool,
     pub(super) results: Option<Results>,
     pub(super) query_error: Option<String>,
-    /// A search is running (or waiting for the corpus) for the current query.
+    /// A search is running (or waiting for repositories to load).
     pub(super) searching: bool,
     pub(super) facet_filter: FacetFilter,
-    /// Files whose every kept line is shown, not just the first few.
+    /// Files whose every kept line is shown, keyed by [`file_key`].
     pub(super) expanded: HashSet<String>,
     pub(super) list_state: ListState,
-    search_task: Option<Task<()>>,
-    search_cancel: Arc<AtomicBool>,
-    _subscriptions: Vec<Subscription>,
-}
-
-/// The open folder and what its index is doing.
-pub(super) struct Folder {
-    pub(super) workspace: Workspace,
-    pub(super) corpus: Option<Arc<Corpus>>,
-    pub(super) index: IndexActivity,
-    /// Files changed since the index was built; `None` if watching failed.
-    tracker: Option<Arc<ChangeTracker>>,
-    pub(super) changed_files: usize,
-    load_task: Option<Task<()>>,
-    index_task: Option<Task<()>>,
+    pub(super) search_task: Option<Task<()>>,
+    pub(super) search_cancel: Arc<AtomicBool>,
     _poll_task: Task<()>,
-}
-
-pub(super) enum IndexActivity {
-    /// Reading the index, or walking the folder when there is none.
-    Loading,
-    Building,
-    Idle(IndexStatus),
-    Failed(String),
+    _subscriptions: Vec<Subscription>,
 }
 
 /// A finished search and the facet view over it.
@@ -89,12 +76,15 @@ impl Results {
     }
 }
 
+/// Identifies a result file across repositories.
+pub(super) fn file_key(file: &FileMatch) -> String {
+    format!("{}\u{0}{}", file.repo.id, file.path)
+}
+
 impl SearchApp {
-    pub fn new(
-        initial_folder: Option<PathBuf>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    /// `folders` are added to the saved repositories, as if chosen with
+    /// "Add repository".
+    pub fn new(folders: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search code…"));
         let path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter paths: src *.rs !test"));
@@ -104,9 +94,12 @@ impl SearchApp {
         ];
         search_input.update(cx, |input, cx| input.focus(window, cx));
 
-        let mut this = Self {
-            folder: None,
-            recent: recent::load(),
+        let this = Self {
+            page: Page::Search,
+            registry: Registry::default(),
+            registry_locked: false,
+            repos: Vec::new(),
+            scope: Scope::default(),
             search_input,
             path_input,
             case_sensitive: false,
@@ -120,11 +113,16 @@ impl SearchApp {
             list_state: ListState::new(0, ListAlignment::Top, px(800.)),
             search_task: None,
             search_cancel: Arc::new(AtomicBool::new(false)),
+            _poll_task: Self::poll_repositories(cx),
             _subscriptions: subscriptions,
         };
-        if let Some(folder) = initial_folder {
-            this.open_folder(folder, window, cx);
-        }
+        // After construction, once the window's `Root` exists to show notifications.
+        cx.defer_in(window, move |this, window, cx| {
+            this.restore_registry(window, cx);
+            if !folders.is_empty() {
+                this.add_repositories(folders, window, cx);
+            }
+        });
         this
     }
 
@@ -142,201 +140,13 @@ impl SearchApp {
         }
     }
 
-    // ----- folders and the index -------------------------------------------
-
-    pub(super) fn open_folder(
-        &mut self,
-        path: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let workspace = match Workspace::open(&path) {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                window.push_notification(Notification::error(format!("{error:#}")), cx);
-                return;
-            }
-        };
-        self.recent = recent::remember(Path::new(&workspace.display_root()));
-        window.set_window_title(&format!("{} — tgrep", workspace.name()));
-        let tracker = ChangeTracker::start(workspace.root()).ok().map(Arc::new);
-        let poll_task = self.poll_changes(workspace.root().to_path_buf(), cx);
-        self.folder = Some(Folder {
-            workspace,
-            corpus: None,
-            index: IndexActivity::Loading,
-            tracker,
-            changed_files: 0,
-            load_task: None,
-            index_task: None,
-            _poll_task: poll_task,
-        });
-        self.facet_filter = FacetFilter::default();
-        self.set_results(None, cx);
-        self.load_corpus(cx);
-    }
-
-    pub(super) fn prompt_for_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(mut paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.pop() else {
-                return;
-            };
-            this.update_in(cx, |this, window, cx| this.open_folder(path, window, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// Load the index (or walk the folder), then search. Builds the index in
-    /// the background when there is no usable one.
-    fn load_corpus(&mut self, cx: &mut Context<Self>) {
-        let Some(folder) = self.folder.as_mut() else {
-            return;
-        };
-        let workspace = folder.workspace.clone();
-        folder.index = IndexActivity::Loading;
-        folder.load_task = Some(cx.spawn(async move |this, cx| {
-            let root = workspace.root().to_path_buf();
-            let (status, corpus) = cx
-                .background_spawn(async move {
-                    let status = workspace.index_status();
-                    (status, workspace.load_corpus())
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                let Some(folder) = this.folder_at(&root) else {
-                    return;
-                };
-                folder.corpus = Some(Arc::new(corpus));
-                let needs_index = !matches!(status, IndexStatus::Ready { .. });
-                folder.index = IndexActivity::Idle(status);
-                if needs_index {
-                    this.build_index(cx);
-                }
-                this.schedule_search(false, cx);
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    /// Refresh the changed-file count now and then, and re-index once enough
-    /// files have changed.
-    fn poll_changes(&self, root: PathBuf, cx: &mut Context<Self>) -> Task<()> {
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(CHANGE_POLL).await;
-                let alive = this.update(cx, |this, cx| {
-                    let Some(folder) = this.folder_at(&root) else {
-                        return;
-                    };
-                    let count = folder
-                        .tracker
-                        .as_ref()
-                        .map_or(0, |tracker| tracker.changed_count());
-                    if count != folder.changed_files {
-                        folder.changed_files = count;
-                        cx.notify();
-                    }
-                    let idle =
-                        matches!(folder.index, IndexActivity::Idle(IndexStatus::Ready { .. }));
-                    if idle && count >= AUTO_REINDEX_CHANGES {
-                        this.build_index(cx);
-                    }
-                });
-                if alive.is_err() {
-                    break;
-                }
-            }
-        })
-    }
-
-    pub(super) fn build_index(&mut self, cx: &mut Context<Self>) {
-        let Some(folder) = self.folder.as_mut() else {
-            return;
-        };
-        if matches!(folder.index, IndexActivity::Building) {
-            return;
+    pub(super) fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = page;
+        if page == Page::Search {
+            self.search_input
+                .update(cx, |input, cx| input.focus(window, cx));
         }
-        let workspace = folder.workspace.clone();
-        let tracker = folder.tracker.clone();
-        let mark = tracker.as_ref().map(|tracker| tracker.mark());
-        folder.index = IndexActivity::Building;
-        folder.index_task = Some(cx.spawn(async move |this, cx| {
-            let root = workspace.root().to_path_buf();
-            let builder = workspace.clone();
-            let staged = cx
-                .background_spawn(async move { builder.build_index() })
-                .await;
-            let staged = match staged {
-                Ok(staged) => staged,
-                Err(error) => {
-                    this.update(cx, |this, cx| {
-                        if let Some(folder) = this.folder_at(&root) {
-                            folder.index = IndexActivity::Failed(format!("{error:#}"));
-                            cx.notify();
-                        }
-                    })
-                    .ok();
-                    return;
-                }
-            };
-
-            // Stop searching and let go of the old index so its files can be
-            // replaced; searches queued meanwhile run once the new one loads.
-            let Ok(Some(old)) = this.update(cx, |this, _| {
-                this.search_cancel.store(true, Ordering::Relaxed);
-                this.search_task = None;
-                this.folder_at(&root).map(|folder| folder.corpus.take())
-            }) else {
-                return;
-            };
-            let (published, status, corpus) = cx
-                .background_spawn(async move {
-                    if let Some(old) = old {
-                        release(old);
-                    }
-                    let published = staged.publish();
-                    (published, workspace.index_status(), workspace.load_corpus())
-                })
-                .await;
-
-            this.update(cx, |this, cx| {
-                let Some(folder) = this.folder_at(&root) else {
-                    return;
-                };
-                folder.corpus = Some(Arc::new(corpus));
-                match published {
-                    Ok(()) => {
-                        if let (Some(tracker), Some(mark)) = (tracker, mark) {
-                            tracker.forget_before(mark);
-                            folder.changed_files = tracker.changed_count();
-                        }
-                        folder.index = IndexActivity::Idle(status);
-                    }
-                    Err(error) => folder.index = IndexActivity::Failed(format!("{error:#}")),
-                }
-                this.schedule_search(false, cx);
-            })
-            .ok();
-        }));
         cx.notify();
-    }
-
-    /// The open folder, if it is still the one at `root`.
-    fn folder_at(&mut self, root: &Path) -> Option<&mut Folder> {
-        self.folder
-            .as_mut()
-            .filter(|folder| folder.workspace.root() == root)
     }
 
     // ----- searching --------------------------------------------------------
@@ -351,7 +161,8 @@ impl SearchApp {
         }
     }
 
-    /// Search for the current query, replacing any search in flight.
+    /// Search the repositories in scope for the current query, replacing any
+    /// search in flight.
     pub(super) fn schedule_search(&mut self, debounce: bool, cx: &mut Context<Self>) {
         self.search_cancel.store(true, Ordering::Relaxed);
         self.search_task = None;
@@ -373,21 +184,13 @@ impl SearchApp {
             }
         };
         self.query_error = None;
+        let (sources, waiting) = self.search_sources();
+        // Repositories still loading trigger another search when they finish.
         self.searching = true;
-        // Without a corpus yet, the search runs once loading finishes.
-        let Some(folder) = self.folder.as_ref() else {
+        if sources.is_empty() && waiting {
             cx.notify();
             return;
-        };
-        let Some(corpus) = folder.corpus.clone() else {
-            cx.notify();
-            return;
-        };
-        let changed = folder
-            .tracker
-            .as_ref()
-            .map(|tracker| tracker.changed_paths())
-            .unwrap_or_default();
+        }
 
         let cancel = Arc::new(AtomicBool::new(false));
         self.search_cancel = cancel.clone();
@@ -397,20 +200,14 @@ impl SearchApp {
             }
             let outcome = cx
                 .background_spawn(async move {
-                    search::search(
-                        &corpus,
-                        &changed,
-                        &compiled,
-                        &SearchLimits::default(),
-                        &cancel,
-                    )
+                    search::search(&sources, &compiled, &SearchLimits::default(), &cancel)
                 })
                 .await;
             if outcome.cancelled {
                 return;
             }
             this.update(cx, |this, cx| {
-                this.searching = false;
+                this.searching = waiting;
                 this.set_results(Some(outcome), cx);
             })
             .ok();
@@ -445,34 +242,24 @@ impl SearchApp {
         cx.notify();
     }
 
-    pub(super) fn toggle_language(&mut self, language: String, cx: &mut Context<Self>) {
-        self.facet_filter.language = toggled(self.facet_filter.language.take(), language);
+    pub(super) fn toggle_facet(&mut self, kind: FacetKind, value: String, cx: &mut Context<Self>) {
+        self.facet_filter.toggle(kind, value);
         self.refresh_visible(cx);
     }
 
-    pub(super) fn toggle_directory(&mut self, directory: String, cx: &mut Context<Self>) {
-        self.facet_filter.directory = toggled(self.facet_filter.directory.take(), directory);
-        self.refresh_visible(cx);
-    }
-
-    pub(super) fn clear_language(&mut self, cx: &mut Context<Self>) {
-        self.facet_filter.language = None;
-        self.refresh_visible(cx);
-    }
-
-    pub(super) fn clear_directory(&mut self, cx: &mut Context<Self>) {
-        self.facet_filter.directory = None;
+    pub(super) fn clear_facet(&mut self, kind: &FacetKind, cx: &mut Context<Self>) {
+        self.facet_filter.clear(kind);
         self.refresh_visible(cx);
     }
 
     pub(super) fn toggle_expanded(
         &mut self,
         visible_index: usize,
-        path: String,
+        key: String,
         cx: &mut Context<Self>,
     ) {
-        if !self.expanded.remove(&path) {
-            self.expanded.insert(path);
+        if !self.expanded.remove(&key) {
+            self.expanded.insert(key);
         }
         // The card changed height; have the list measure it again.
         self.list_state.splice(visible_index..visible_index + 1, 1);
@@ -498,18 +285,13 @@ impl SearchApp {
 
     pub(super) fn open_hit(
         &mut self,
+        root: &Path,
         path: &str,
         line: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(folder) = self.folder.as_ref() else {
-            return;
-        };
-        let file = folder
-            .workspace
-            .root()
-            .join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file = full_path(root, path);
         match editor::resolve(&file, line) {
             Launch::Command { program, args } => {
                 if let Err(error) = editor::spawn(&program, &args) {
@@ -527,14 +309,8 @@ impl SearchApp {
         }
     }
 
-    pub(super) fn reveal(&mut self, path: &str, cx: &mut Context<Self>) {
-        if let Some(folder) = self.folder.as_ref() {
-            let file = folder
-                .workspace
-                .root()
-                .join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
-            cx.reveal_path(&file);
-        }
+    pub(super) fn reveal(&mut self, root: &Path, path: &str, cx: &mut Context<Self>) {
+        cx.reveal_path(&full_path(root, path));
     }
 
     pub(super) fn copy_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -544,13 +320,27 @@ impl SearchApp {
 
     // ----- actions ------------------------------------------------------------
 
-    pub(super) fn on_open_folder(
+    pub(super) fn on_add_repository(
         &mut self,
-        _: &OpenFolder,
+        _: &AddRepository,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prompt_for_folder(window, cx);
+        self.prompt_for_repositories(window, cx);
+    }
+
+    pub(super) fn on_show_repositories(
+        &mut self,
+        _: &ShowRepositories,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let page = if self.page == Page::Repositories {
+            Page::Search
+        } else {
+            Page::Repositories
+        };
+        self.show_page(page, window, cx);
     }
 
     pub(super) fn on_focus_search(
@@ -559,8 +349,7 @@ impl SearchApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.search_input
-            .update(cx, |input, cx| input.focus(window, cx));
+        self.show_page(Page::Search, window, cx);
     }
 
     pub(super) fn on_focus_path_filter(
@@ -569,8 +358,10 @@ impl SearchApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.page = Page::Search;
         self.path_input
             .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
     }
 
     pub(super) fn on_toggle_case_sensitive(
@@ -606,7 +397,7 @@ impl SearchApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.build_index(cx);
+        self.queue_scope_indexes(cx);
     }
 
     pub(super) fn on_toggle_theme(
@@ -624,20 +415,6 @@ impl SearchApp {
     }
 }
 
-/// Close an index once in-flight searches drop their handles to it. Each
-/// search checks its cancel flag between files, so this is quick.
-fn release(corpus: Arc<Corpus>) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while Arc::strong_count(&corpus) > 1 && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Select `value`, or clear the selection when it is already selected.
-fn toggled(current: Option<String>, value: String) -> Option<String> {
-    if current.as_deref() == Some(value.as_str()) {
-        None
-    } else {
-        Some(value)
-    }
+fn full_path(root: &Path, path: &str) -> PathBuf {
+    root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR))
 }

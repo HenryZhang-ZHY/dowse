@@ -1,7 +1,9 @@
-//! Running a compiled query over a corpus and shaping the hits into snippets.
+//! Running a compiled query over the corpora of several repositories and
+//! shaping the hits into snippets.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,7 @@ use tgrep_core::encoding::{self, EncodingMode};
 
 use super::language;
 use super::query::CompiledQuery;
+use super::repo::RepoInfo;
 use super::workspace::Corpus;
 
 /// Files searched in parallel between checks of the result limit.
@@ -63,7 +66,8 @@ pub struct Snippet {
 
 #[derive(Clone, Debug)]
 pub struct FileMatch {
-    /// Workspace-relative, `/`-separated.
+    pub repo: Arc<RepoInfo>,
+    /// Relative to the repository root, `/`-separated.
     pub path: String,
     pub language: Option<&'static str>,
     /// Every matching line in the file, including ones not kept in `snippets`.
@@ -92,44 +96,56 @@ impl FileMatch {
 
 #[derive(Clone, Debug, Default)]
 pub struct SearchOutcome {
-    /// Sorted by path.
+    /// In source order, then by path.
     pub files: Vec<FileMatch>,
     pub matched_lines: usize,
     /// Files read after index narrowing and path filtering.
     pub searched_files: usize,
-    /// Files in the whole corpus.
+    /// Files in every searched corpus.
     pub corpus_files: usize,
-    pub indexed: bool,
+    /// Repositories searched.
+    pub repos: usize,
+    /// Repositories without a usable index, whose folders were scanned.
+    pub unindexed_repos: usize,
     /// The result limit was hit, so some files were not searched.
     pub truncated: bool,
     pub cancelled: bool,
     pub elapsed: Duration,
 }
 
-/// Search `corpus` for `query`, checking `cancel` between files.
-///
-/// `changed` lists files modified since the index was built (see
-/// [`super::watch::ChangeTracker`]). They are read regardless of what the
-/// index says, so edits are found before the next index build.
+/// One repository to search: its files, and those changed since its index
+/// was built (see [`super::watch::ChangeTracker`]). Changed files are read
+/// regardless of what the index says, so edits are found before a rebuild.
+#[derive(Clone)]
+pub struct SearchSource {
+    pub repo: Arc<RepoInfo>,
+    pub corpus: Arc<Corpus>,
+    pub changed: Vec<String>,
+}
+
+/// Search every source for `query`, checking `cancel` between files.
 pub fn search(
-    corpus: &Corpus,
-    changed: &[String],
+    sources: &[SearchSource],
     query: &CompiledQuery,
     limits: &SearchLimits,
     cancel: &AtomicBool,
 ) -> SearchOutcome {
     let started = Instant::now();
-    let mut candidates = corpus.candidates(&query.plan);
-    if !changed.is_empty() {
-        candidates.extend(changed.iter().cloned());
-        candidates.sort();
-        candidates.dedup();
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let mut paths = source.corpus.candidates(&query.plan);
+        if !source.changed.is_empty() {
+            paths.extend(source.changed.iter().cloned());
+            paths.sort();
+            paths.dedup();
+        }
+        paths.retain(|path| query.path_filter.matches(path));
+        candidates.extend(paths.into_iter().map(|path| (index, path)));
     }
-    candidates.retain(|path| query.path_filter.matches(path));
 
-    // Files are searched in path-ordered chunks, each in parallel, so a
-    // truncated result is always the first files in path order rather than
-    // whichever threads happened to finish first.
+    // Files are searched in ordered chunks, each in parallel, so a truncated
+    // result is always the first files in order rather than whichever threads
+    // happened to finish first.
     let mut files: Vec<FileMatch> = Vec::new();
     let mut total_lines = 0;
     let mut truncated = false;
@@ -137,12 +153,13 @@ pub fn search(
     while let Some(chunk) = chunks.next() {
         let found: Vec<FileMatch> = chunk
             .par_iter()
-            .filter_map(|path| {
+            .filter_map(|(index, path)| {
                 if cancel.load(Ordering::Relaxed) {
                     return None;
                 }
-                let text = read_text(&corpus.full_path(path), limits.max_file_size)?;
-                match_text(path, &text, &query.matcher, limits)
+                let source = &sources[*index];
+                let text = read_text(&source.corpus.full_path(path), limits.max_file_size)?;
+                match_text(&source.repo, path, &text, &query.matcher, limits)
             })
             .collect();
         total_lines += found.iter().map(|file| file.matched_lines).sum::<usize>();
@@ -160,8 +177,15 @@ pub fn search(
         matched_lines: files.iter().map(|file| file.matched_lines).sum(),
         files,
         searched_files: candidates.len(),
-        corpus_files: corpus.file_count(),
-        indexed: corpus.is_indexed(),
+        corpus_files: sources
+            .iter()
+            .map(|source| source.corpus.file_count())
+            .sum(),
+        repos: sources.len(),
+        unindexed_repos: sources
+            .iter()
+            .filter(|source| !source.corpus.is_indexed())
+            .count(),
         truncated,
         cancelled: cancel.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
@@ -192,6 +216,7 @@ struct Hit {
 /// Find matching lines in `text` and build its snippets, or `None` when
 /// nothing matches.
 pub fn match_text(
+    repo: &Arc<RepoInfo>,
     path: &str,
     text: &str,
     matcher: &Regex,
@@ -249,6 +274,7 @@ pub fn match_text(
         return None;
     }
     Some(FileMatch {
+        repo: repo.clone(),
         path: path.to_string(),
         language: language::detect(path),
         matched_lines,
@@ -390,89 +416,6 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
-/// The facet values a result set is narrowed to.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FacetFilter {
-    pub language: Option<String>,
-    pub directory: Option<String>,
-}
-
-impl FacetFilter {
-    pub fn is_empty(&self) -> bool {
-        self.language.is_none() && self.directory.is_none()
-    }
-
-    pub fn matches(&self, file: &FileMatch) -> bool {
-        self.matches_language(file) && self.matches_directory(file)
-    }
-
-    fn matches_language(&self, file: &FileMatch) -> bool {
-        self.language
-            .as_deref()
-            .is_none_or(|language| language_name(file) == language)
-    }
-
-    fn matches_directory(&self, file: &FileMatch) -> bool {
-        self.directory
-            .as_deref()
-            .is_none_or(|directory| top_directory(&file.path) == directory)
-    }
-}
-
-/// Facet counts over a result set: how many matching files per value.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Facets {
-    pub languages: Vec<(String, usize)>,
-    pub directories: Vec<(String, usize)>,
-}
-
-/// The facet value for files directly in the workspace root.
-pub const ROOT_DIRECTORY: &str = "(root)";
-
-/// The top-level directory a path belongs to, as shown in the facet.
-pub fn top_directory(path: &str) -> &str {
-    match path.split_once('/') {
-        Some((first, _)) => first,
-        None => ROOT_DIRECTORY,
-    }
-}
-
-pub const OTHER_LANGUAGE: &str = "Other";
-
-pub fn language_name(file: &FileMatch) -> &str {
-    file.language.unwrap_or(OTHER_LANGUAGE)
-}
-
-impl Facets {
-    /// Count each facet over the files that pass the *other* facet's filter,
-    /// so picking a language shows how its files spread across directories
-    /// while every language stays visible to switch to.
-    pub fn new(files: &[FileMatch], filter: &FacetFilter) -> Self {
-        let mut languages: BTreeMap<&str, usize> = BTreeMap::new();
-        let mut directories: BTreeMap<&str, usize> = BTreeMap::new();
-        for file in files {
-            if filter.matches_directory(file) {
-                *languages.entry(language_name(file)).or_default() += 1;
-            }
-            if filter.matches_language(file) {
-                *directories.entry(top_directory(&file.path)).or_default() += 1;
-            }
-        }
-        let sorted = |map: BTreeMap<&str, usize>| {
-            let mut entries: Vec<(String, usize)> = map
-                .into_iter()
-                .map(|(name, count)| (name.to_string(), count))
-                .collect();
-            entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            entries
-        };
-        Self {
-            languages: sorted(languages),
-            directories: sorted(directories),
-        }
-    }
-}
-
 #[cfg(test)]
 // Highlight ranges are ranges, not a request to collect them.
 #[allow(clippy::single_range_in_vec_init)]
@@ -483,6 +426,41 @@ mod tests {
 
     fn limits() -> SearchLimits {
         SearchLimits::default()
+    }
+
+    fn repo_at(name: &str, root: &std::path::Path) -> Arc<RepoInfo> {
+        Arc::new(RepoInfo {
+            id: name.into(),
+            name: name.into(),
+            root: root.to_path_buf(),
+            branch: None,
+            tags: vec![],
+        })
+    }
+
+    fn repo() -> Arc<RepoInfo> {
+        repo_at("repo", std::path::Path::new("."))
+    }
+
+    /// Index `root` and wrap it as a search source.
+    fn indexed_source(name: &str, root: &std::path::Path) -> SearchSource {
+        let workspace = Workspace::open(root).unwrap();
+        workspace.build_index().unwrap().publish().unwrap();
+        let corpus = workspace.load_corpus();
+        assert!(corpus.is_indexed());
+        SearchSource {
+            repo: repo_at(name, root),
+            corpus: Arc::new(corpus),
+            changed: vec![],
+        }
+    }
+
+    fn compile(pattern: &str) -> CompiledQuery {
+        CompiledQuery::new(&SearchQuery {
+            pattern: pattern.into(),
+            ..Default::default()
+        })
+        .unwrap()
     }
 
     fn matcher(pattern: &str) -> Regex {
@@ -503,7 +481,7 @@ mod tests {
     #[test]
     fn finds_lines_with_context_and_merges_adjacent_runs() {
         let text = "a\nb\nneedle 1\nc\nneedle 2\nd\ne\nf\nneedle 3\n";
-        let file = match_text("x.txt", text, &matcher("needle"), &limits()).unwrap();
+        let file = match_text(&repo(), "x.txt", text, &matcher("needle"), &limits()).unwrap();
         assert_eq!(file.matched_lines, 3);
         assert_eq!(file.snippets.len(), 2);
         assert_eq!(
@@ -525,7 +503,7 @@ mod tests {
     #[test]
     fn handles_crlf_and_anchors() {
         let text = "fn a() {}\r\n  fn b() {}\r\nfn c() {}";
-        let file = match_text("x.rs", text, &matcher("^fn"), &limits()).unwrap();
+        let file = match_text(&repo(), "x.rs", text, &matcher("^fn"), &limits()).unwrap();
         let matched: Vec<usize> = lines(&file).iter().filter(|l| l.2).map(|l| l.0).collect();
         assert_eq!(matched, vec![1, 3]);
         assert!(lines(&file).iter().all(|l| !l.1.ends_with('\r')));
@@ -534,12 +512,12 @@ mod tests {
     #[test]
     fn a_match_spanning_lines_is_not_reported() {
         let text = "foo\nbar\n";
-        assert!(match_text("x", text, &matcher(r"foo\sbar"), &limits()).is_none());
+        assert!(match_text(&repo(), "x", text, &matcher(r"foo\sbar"), &limits()).is_none());
     }
 
     #[test]
     fn multiple_matches_on_a_line_are_all_highlighted() {
-        let file = match_text("x", "ab ab ab\n", &matcher("ab"), &limits()).unwrap();
+        let file = match_text(&repo(), "x", "ab ab ab\n", &matcher("ab"), &limits()).unwrap();
         assert_eq!(file.snippets[0].lines[0].highlights, vec![0..2, 3..5, 6..8]);
     }
 
@@ -551,7 +529,7 @@ mod tests {
             context_lines: 0,
             ..limits()
         };
-        let file = match_text("x", &text, &matcher("hit"), &limits).unwrap();
+        let file = match_text(&repo(), "x", &text, &matcher("hit"), &limits).unwrap();
         assert_eq!(file.matched_lines, 10);
         assert_eq!(file.kept_lines(), 3);
     }
@@ -579,47 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn facets_count_files_per_language_and_directory() {
-        let file = |path: &str| FileMatch {
-            path: path.into(),
-            language: language::detect(path),
-            matched_lines: 1,
-            snippets: vec![],
-        };
-        let files = [
-            file("src/a.rs"),
-            file("src/b.rs"),
-            file("docs/c.md"),
-            file("README.md"),
-        ];
-        let facets = Facets::new(&files, &FacetFilter::default());
-        assert_eq!(
-            facets.languages,
-            vec![("Markdown".into(), 2), ("Rust".into(), 2)]
-        );
-        assert_eq!(
-            facets.directories,
-            vec![("src".into(), 2), ("(root)".into(), 1), ("docs".into(), 1)]
-        );
-
-        // Each facet is counted under the other facet's filter only.
-        let filter = FacetFilter {
-            language: Some("Markdown".into()),
-            directory: None,
-        };
-        let facets = Facets::new(&files, &filter);
-        assert_eq!(
-            facets.languages,
-            vec![("Markdown".into(), 2), ("Rust".into(), 2)]
-        );
-        assert_eq!(
-            facets.directories,
-            vec![("(root)".into(), 1), ("docs".into(), 1)]
-        );
-        assert_eq!(files.iter().filter(|f| filter.matches(f)).count(), 2);
-    }
-
-    #[test]
     fn end_to_end_search_over_an_indexed_workspace() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -629,14 +566,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("notes.md"), "parse later\n").unwrap();
-        let workspace = Workspace::open(dir.path()).unwrap();
-        workspace.build_index().unwrap().publish().unwrap();
-        let corpus = workspace.load_corpus();
-        assert!(corpus.is_indexed());
+        let sources = [indexed_source("repo", dir.path())];
 
         let run = |query: SearchQuery| {
             let compiled = CompiledQuery::new(&query).unwrap();
-            search(&corpus, &[], &compiled, &limits(), &AtomicBool::new(false))
+            search(&sources, &compiled, &limits(), &AtomicBool::new(false))
         };
         let base = SearchQuery {
             pattern: "parse".into(),
@@ -673,45 +607,67 @@ mod tests {
     #[test]
     fn changed_files_are_searched_even_when_the_index_predates_them() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("old.rs"),
-            "fn old() {}
-",
-        )
-        .unwrap();
-        let workspace = Workspace::open(dir.path()).unwrap();
-        workspace.build_index().unwrap().publish().unwrap();
-        let corpus = workspace.load_corpus();
-        std::fs::write(
-            dir.path().join("new.rs"),
-            "fn brand_new() {}
-",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("old.rs"), "fn old() {}\n").unwrap();
+        let mut source = indexed_source("repo", dir.path());
+        std::fs::write(dir.path().join("new.rs"), "fn brand_new() {}\n").unwrap();
 
-        let compiled = CompiledQuery::new(&SearchQuery {
-            pattern: "brand_new".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let stale = search(&corpus, &[], &compiled, &limits(), &AtomicBool::new(false));
-        assert!(stale.files.is_empty());
-        let fresh = search(
-            &corpus,
-            &["new.rs".into()],
-            &compiled,
-            &limits(),
-            &AtomicBool::new(false),
-        );
-        assert_eq!(fresh.files.len(), 1);
+        let compiled = compile("brand_new");
+        let run = |source: &SearchSource| {
+            search(
+                std::slice::from_ref(source),
+                &compiled,
+                &limits(),
+                &AtomicBool::new(false),
+            )
+        };
+        assert!(run(&source).files.is_empty());
+        source.changed = vec!["new.rs".into()];
+        assert_eq!(run(&source).files.len(), 1);
         // A changed file that was deleted is skipped quietly.
-        let gone = search(
-            &corpus,
-            &["gone.rs".into()],
-            &compiled,
+        source.changed = vec!["gone.rs".into()];
+        assert!(run(&source).files.is_empty());
+    }
+
+    #[test]
+    fn searches_across_repositories_in_source_order() {
+        let (main, dev) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(main.path().join("auth.rs"), "fn login() {}\n").unwrap();
+        std::fs::write(
+            dev.path().join("auth.rs"),
+            "fn login() {}\nfn login_v2() {}\n",
+        )
+        .unwrap();
+        std::fs::write(dev.path().join("other.rs"), "nothing here\n").unwrap();
+        let sources = [
+            indexed_source("api", main.path()),
+            indexed_source("api-dev", dev.path()),
+        ];
+
+        let outcome = search(
+            &sources,
+            &compile("login"),
             &limits(),
             &AtomicBool::new(false),
         );
-        assert!(gone.files.is_empty());
+        let found: Vec<(&str, &str, usize)> = outcome
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.repo.name.as_str(),
+                    file.path.as_str(),
+                    file.matched_lines,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            vec![("api", "auth.rs", 1), ("api-dev", "auth.rs", 2)]
+        );
+        assert_eq!(outcome.repos, 2);
+        assert_eq!(outcome.unindexed_repos, 0);
+        assert_eq!(outcome.corpus_files, 3);
+        // The index narrowed each repository to the one file mentioning it.
+        assert_eq!(outcome.searched_files, 2);
     }
 }

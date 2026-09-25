@@ -3,9 +3,7 @@
 
 mod assets;
 mod editor;
-
 mod format;
-mod recent;
 mod ui;
 
 use std::path::PathBuf;
@@ -14,9 +12,9 @@ use gpui_kit::component::Root;
 use gpui_kit::*;
 
 fn main() {
-    // `tgrep-gpui [FOLDER]` opens FOLDER; without it the welcome screen lists
-    // recent folders.
-    let initial_folder = std::env::args_os().nth(1).map(PathBuf::from);
+    // `tgrep-gpui [FOLDER...]` adds each folder (or the git repositories
+    // inside it) to the saved repositories.
+    let folders: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
 
     gpui_kit::application()
         .with_assets(assets::AppAssets)
@@ -45,7 +43,7 @@ fn main() {
             };
             cx.spawn(async move |cx| {
                 cx.open_window(options, |window, cx| {
-                    let view = cx.new(|cx| ui::SearchApp::new(initial_folder, window, cx));
+                    let view = cx.new(|cx| ui::SearchApp::new(folders, window, cx));
                     // `Root` hosts notifications, dialogs and tooltips.
                     cx.new(|cx| Root::new(view, window, cx))
                 })

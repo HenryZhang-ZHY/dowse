@@ -1,7 +1,10 @@
-//! The desktop UI: one window with a search bar, facet sidebar and results.
+//! The desktop UI: one window with a search page (scope bar, facet sidebar,
+//! results) and a repositories page for adding and tagging repositories.
 
 mod app;
 mod render;
+mod repos;
+mod repos_page;
 
 pub use app::SearchApp;
 
@@ -13,7 +16,8 @@ pub(crate) const CONTEXT: &str = "SearchApp";
 actions!(
     tgrep,
     [
-        OpenFolder,
+        AddRepository,
+        ShowRepositories,
         FocusSearch,
         FocusPathFilter,
         ToggleCaseSensitive,
@@ -27,7 +31,8 @@ actions!(
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("secondary-o", OpenFolder, Some(CONTEXT)),
+        KeyBinding::new("secondary-o", AddRepository, Some(CONTEXT)),
+        KeyBinding::new("secondary-,", ShowRepositories, Some(CONTEXT)),
         KeyBinding::new("secondary-f", FocusSearch, Some(CONTEXT)),
         KeyBinding::new("secondary-k", FocusSearch, Some(CONTEXT)),
         KeyBinding::new("secondary-p", FocusPathFilter, Some(CONTEXT)),

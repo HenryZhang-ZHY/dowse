@@ -1,5 +1,5 @@
-//! How the main view looks: header with the search bar, facet sidebar,
-//! result cards and the status bar.
+//! How the search page looks: header with the search bar, the scope bar,
+//! facet sidebar, result cards and the status bar.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -18,10 +19,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::CONTEXT;
-use super::app::{IndexActivity, SearchApp};
+use super::app::{Page, SearchApp, file_key};
+use super::repos::{IndexActivity, RepoState};
 use crate::format;
+use tgrep_gpui::engine::facets::FacetKind;
+use tgrep_gpui::engine::repo::{self, BRANCH_GROUP};
 use tgrep_gpui::engine::search::{FileMatch, Snippet, SnippetLine};
-use tgrep_gpui::engine::workspace::{IndexStatus, display_path};
+use tgrep_gpui::engine::workspace::IndexStatus;
 
 /// Matching lines shown per file before "Show more".
 const COLLAPSED_MATCH_LINES: usize = 6;
@@ -32,22 +36,29 @@ const LINE_NUMBER_WIDTH: f32 = 60.;
 
 impl Render for SearchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = if self.folder.is_some() {
-            h_flex()
+        let body = match self.page {
+            Page::Repositories => self.render_repositories_page(cx).into_any_element(),
+            Page::Search if self.repos.is_empty() => self.render_welcome(cx).into_any_element(),
+            Page::Search => v_flex()
                 .flex_1()
                 .min_h_0()
-                .items_start()
-                .child(self.render_sidebar(cx))
-                .child(self.render_results(window, cx))
-                .into_any_element()
-        } else {
-            self.render_welcome(cx).into_any_element()
+                .child(self.render_scope_bar(cx))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .items_start()
+                        .child(self.render_sidebar(cx))
+                        .child(self.render_results(window, cx)),
+                )
+                .into_any_element(),
         };
 
         v_flex()
             .id("search-app")
             .key_context(CONTEXT)
-            .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_add_repository))
+            .on_action(cx.listener(Self::on_show_repositories))
             .on_action(cx.listener(Self::on_focus_search))
             .on_action(cx.listener(Self::on_focus_path_filter))
             .on_action(cx.listener(Self::on_toggle_case_sensitive))
@@ -68,7 +79,7 @@ impl SearchApp {
     fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let has_folder = self.folder.is_some();
+        let searchable = !self.repos.is_empty();
 
         let toggles = h_flex()
             .gap_0p5()
@@ -102,24 +113,22 @@ impl SearchApp {
                 .on_click(cx.listener(|this, _, _, cx| this.set_regex(!this.regex, cx))),
             );
 
-        let folder_button = match self.folder.as_ref() {
-            Some(folder) => Button::new("open-folder")
-                .ghost()
-                .small()
-                .icon(IconName::FolderOpen)
-                .label(folder.workspace.name())
-                .tooltip(format!(
-                    "{} — open another folder (Ctrl+O)",
-                    folder.workspace.display_root()
-                )),
-            None => Button::new("open-folder")
-                .ghost()
-                .small()
-                .icon(IconName::FolderOpen)
-                .label("Open Folder")
-                .tooltip("Open a folder (Ctrl+O)"),
-        }
-        .on_click(cx.listener(|this, _, window, cx| this.prompt_for_folder(window, cx)));
+        let on_repositories = self.page == Page::Repositories;
+        let repositories_button = Button::new("repositories")
+            .ghost()
+            .small()
+            .icon(Lucide::FolderGit2)
+            .label(format!("Repositories · {}", self.repos.len()))
+            .selected(on_repositories)
+            .tooltip("Add, tag and index repositories (Ctrl+,)")
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let page = if on_repositories {
+                    Page::Search
+                } else {
+                    Page::Repositories
+                };
+                this.show_page(page, window, cx)
+            }));
 
         let theme_icon = if theme.is_dark() {
             IconName::Sun
@@ -137,10 +146,15 @@ impl SearchApp {
             .bg(theme.title_bar)
             .child(
                 h_flex()
+                    .id("home")
                     .flex_none()
                     .gap_1p5()
+                    .cursor_pointer()
                     .child(Icon::new(Lucide::TextSearch).text_color(theme.primary))
-                    .child(div().font_semibold().child("tgrep")),
+                    .child(div().font_semibold().child("tgrep"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_page(Page::Search, window, cx)),
+                    ),
             )
             .child(
                 div().flex_1().max_w(px(960.)).child(
@@ -148,7 +162,7 @@ impl SearchApp {
                         .prefix(Icon::new(IconName::Search).small().text_color(muted))
                         .suffix(toggles)
                         .cleanable(true)
-                        .disabled(!has_folder),
+                        .disabled(!searchable),
                 ),
             )
             .child(
@@ -156,7 +170,7 @@ impl SearchApp {
                     Input::new(&self.path_input)
                         .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
                         .cleanable(true)
-                        .disabled(!has_folder),
+                        .disabled(!searchable),
                 ),
             )
             .child(
@@ -164,7 +178,7 @@ impl SearchApp {
                     .flex_none()
                     .ml_auto()
                     .gap_1()
-                    .child(folder_button)
+                    .child(repositories_button)
                     .child(
                         Button::new("toggle-theme")
                             .ghost()
@@ -176,6 +190,169 @@ impl SearchApp {
                             })),
                     ),
             )
+    }
+
+    // ----- scope bar ------------------------------------------------------------
+
+    /// Which repositories are searched: the selected tags as removable chips,
+    /// and a picker listing every tag.
+    fn render_scope_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, accent, accent_foreground, link) = (
+            theme.muted_foreground,
+            theme.accent,
+            theme.accent_foreground,
+            theme.primary,
+        );
+        let total = self.repos.len();
+        let in_scope = self.in_scope().count();
+        let selected: Vec<String> = self.scope.tags().map(str::to_string).collect();
+
+        let chips = selected.iter().map(|tag| {
+            let target = tag.clone();
+            h_flex()
+                .id(SharedString::from(format!("scope-chip:{tag}")))
+                .gap_1()
+                .pl_2()
+                .pr_1()
+                .py_0p5()
+                .rounded_full()
+                .bg(accent)
+                .text_color(accent_foreground)
+                .text_xs()
+                .cursor_pointer()
+                .child(tag_label(tag))
+                .child(Icon::new(IconName::Close).xsmall())
+                .tooltip(|window, cx| Tooltip::new("Remove from scope").build(window, cx))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_scope_tag(&target, window, cx)
+                }))
+        });
+
+        let catalog = repo::tag_catalog(self.repos.iter().map(|repo| &*repo.info));
+        let app = cx.entity();
+        let scope = self.scope.clone();
+        let picker = Popover::new("scope-picker")
+            .trigger(
+                Button::new("scope-add")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Tag)
+                    .label(if selected.is_empty() {
+                        "Narrow by tag"
+                    } else {
+                        "Tags"
+                    }),
+            )
+            .content(move |_, _, cx| {
+                let theme = cx.theme();
+                let (muted, hover, radius) = (theme.muted_foreground, theme.list_hover, theme.radius);
+                if catalog.is_empty() {
+                    return v_flex()
+                        .w(px(280.))
+                        .gap_2()
+                        .text_sm()
+                        .child("No tags yet.")
+                        .child(
+                            div()
+                                .text_color(muted)
+                                .child("Tag repositories on the Repositories page, e.g. mirror, dev or owner:alice."),
+                        )
+                        .into_any_element();
+                }
+                let groups = catalog.iter().map(|(group, tags)| {
+                    let rows = tags.iter().map(|(tag, count)| {
+                        let checked = scope.contains(tag);
+                        let (app, target) = (app.clone(), tag.clone());
+                        h_flex()
+                            .id(SharedString::from(format!("scope-option:{tag}")))
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(radius)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover))
+                            .child(
+                                div()
+                                    .w(px(16.))
+                                    .flex_none()
+                                    .when(checked, |slot| slot.child(Icon::new(IconName::Check).small())),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child(tag_value(tag).to_string()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format::plural(*count, "repo", "repos")),
+                            )
+                            .on_click(move |_, window, cx| {
+                                app.update(cx, |this, cx| this.toggle_scope_tag(&target, window, cx))
+                            })
+                    });
+                    v_flex()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(muted)
+                                .child(group_title(group).to_uppercase()),
+                        )
+                        .children(rows)
+                });
+                v_flex()
+                    .id("scope-options")
+                    .w(px(300.))
+                    .max_h(px(440.))
+                    .gap_2()
+                    .text_sm()
+                    .children(groups)
+                    .child(
+                        div()
+                            .px_2()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("Tags in one group are alternatives; groups narrow each other."),
+                    )
+                    .overflow_y_scrollbar()
+                    .into_any_element()
+            });
+
+        h_flex()
+            .flex_none()
+            .gap_2()
+            .px_4()
+            .py_1p5()
+            .border_b_1()
+            .border_color(theme.border)
+            .text_sm()
+            .child(div().text_color(muted).child(if selected.is_empty() {
+                format!(
+                    "Searching all {}",
+                    format::plural(total, "repository", "repositories")
+                )
+            } else {
+                format!(
+                    "Searching {in_scope} of {}",
+                    format::plural(total, "repository", "repositories")
+                )
+            }))
+            .children(chips)
+            .child(picker)
+            .when(!selected.is_empty(), |bar| {
+                bar.child(
+                    div()
+                        .id("scope-clear")
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(link)
+                        .hover(|style| style.underline())
+                        .child("Clear")
+                        .on_click(cx.listener(|this, _, window, cx| this.clear_scope(window, cx))),
+                )
+            })
     }
 
     // ----- sidebar ------------------------------------------------------------
@@ -201,57 +378,38 @@ impl SearchApp {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("Filters for languages and directories appear here once a search finds matches."),
+                        .child("Filters appear here once a search finds matches. They narrow the results without changing which repositories are searched."),
                 )
                 .overflow_y_scrollbar();
         };
-
-        let languages = self.facet_section(
-            "Language",
-            &results.facets.languages,
-            self.facet_filter.language.as_deref(),
-            FacetHandlers {
-                toggle: |this, value, cx| this.toggle_language(value, cx),
-                clear: |this, cx| this.clear_language(cx),
-            },
-            cx,
-        );
-        let directories = self.facet_section(
-            "Directory",
-            &results.facets.directories,
-            self.facet_filter.directory.as_deref(),
-            FacetHandlers {
-                toggle: |this, value, cx| this.toggle_directory(value, cx),
-                clear: |this, cx| this.clear_directory(cx),
-            },
-            cx,
-        );
-        sidebar
-            .child(languages)
-            .child(directories)
-            .overflow_y_scrollbar()
+        let sections: Vec<AnyElement> = results
+            .facets
+            .sections
+            .iter()
+            .filter(|(_, entries)| !entries.is_empty())
+            .map(|(kind, entries)| self.facet_section(kind, entries, cx).into_any_element())
+            .collect();
+        sidebar.children(sections).overflow_y_scrollbar()
     }
 
     fn facet_section(
         &self,
-        title: &'static str,
+        kind: &FacetKind,
         entries: &[(String, usize)],
-        selected: Option<&str>,
-        handlers: FacetHandlers,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
         let (hover, active, muted) = (theme.list_hover, theme.accent, theme.muted_foreground);
-        let (active_foreground, link) = (theme.accent_foreground, theme.link);
+        let (active_foreground, link) = (theme.accent_foreground, theme.primary);
         let radius = theme.radius;
-        let on_toggle = handlers.toggle;
-        let on_clear = handlers.clear;
+        let selected = self.facet_filter.get(kind);
+        let title = kind.title();
 
-        let rows = entries.iter().take(FACET_ROWS).map(|(name, count)| {
-            let is_selected = selected == Some(name.as_str());
-            let value = name.clone();
+        let rows = entries.iter().take(FACET_ROWS).map(|(value, count)| {
+            let is_selected = selected == Some(value.as_str());
+            let (kind, target) = (kind.clone(), value.clone());
             h_flex()
-                .id(SharedString::from(format!("facet:{title}:{name}")))
+                .id(SharedString::from(format!("facet:{title}:{value}")))
                 .gap_2()
                 .px_2()
                 .py_1()
@@ -262,21 +420,28 @@ impl SearchApp {
                 .when(is_selected, |row| {
                     row.bg(active).text_color(active_foreground).font_semibold()
                 })
-                .child(div().flex_1().min_w_0().truncate().child(name.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(kind.display(value).to_string()),
+                )
                 .child(
                     div()
                         .text_xs()
                         .text_color(muted)
                         .child(format::count(*count)),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| on_toggle(this, value.clone(), cx)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_facet(kind.clone(), target.clone(), cx)
+                }))
         });
         let hidden = entries.len().saturating_sub(FACET_ROWS);
-        let empty = entries.is_empty();
+        let clear_kind = kind.clone();
 
         v_flex()
             .gap_0p5()
-            .when(empty, |section| section.hidden())
             .child(
                 h_flex()
                     .px_2()
@@ -297,7 +462,9 @@ impl SearchApp {
                                 .text_color(link)
                                 .hover(|style| style.underline())
                                 .child("Clear")
-                                .on_click(cx.listener(move |this, _, _, cx| on_clear(this, cx))),
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.clear_facet(&clear_kind, cx)
+                                })),
                         )
                     }),
             )
@@ -339,6 +506,17 @@ impl SearchApp {
                 error,
             )
             .into_any_element()
+        } else if self.in_scope().next().is_none() {
+            centered_message(
+                cx,
+                Icon::new(Lucide::Tag).text_color(muted),
+                "No repositories in scope",
+                format!(
+                    "The selected tags match none of your {}. Change the scope above.",
+                    format::plural(self.repos.len(), "repository", "repositories")
+                ),
+            )
+            .into_any_element()
         } else if self.results.is_none() {
             if self.searching {
                 div().into_any_element()
@@ -357,7 +535,7 @@ impl SearchApp {
                 if !self.facet_filter.is_empty() {
                     "Nothing matches with the current filters. Try clearing them.".to_string()
                 } else {
-                    "Try a shorter query, turn off whole word or case matching, or widen the path filter."
+                    "Try a shorter query, turn off whole word or case matching, widen the path filter, or widen the scope."
                         .to_string()
                 },
             )
@@ -402,6 +580,21 @@ impl SearchApp {
             format::plural(outcome.matched_lines, "result", "results"),
             format::plural(outcome.files.len(), "file", "files"),
         )];
+        if outcome.repos > 1 {
+            let with_hits = {
+                let mut ids: Vec<&str> = outcome
+                    .files
+                    .iter()
+                    .map(|file| file.repo.id.as_str())
+                    .collect();
+                ids.dedup();
+                ids.len()
+            };
+            parts[0].push_str(&format!(
+                " across {}",
+                format::plural(with_hits, "repository", "repositories")
+            ));
+        }
         if results.visible.len() != outcome.files.len() {
             parts.push(format!(
                 "showing {}",
@@ -414,8 +607,14 @@ impl SearchApp {
             format::plural(outcome.corpus_files, "file", "files"),
         ));
         parts.push(format::duration(outcome.elapsed));
-        if !outcome.indexed {
-            parts.push("no index, scanned the folder".into());
+        if outcome.unindexed_repos > 0 {
+            parts.push(format!(
+                "{} without an index, scanned",
+                format::plural(outcome.unindexed_repos, "repository", "repositories")
+            ));
+        }
+        if self.searching {
+            parts.push("some repositories are still loading".into());
         }
         if outcome.truncated {
             parts.push("result limit reached, refine the query".into());
@@ -424,18 +623,20 @@ impl SearchApp {
     }
 
     fn render_file(&mut self, visible_index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(file) = self
-            .results
-            .as_ref()
-            .and_then(|results| results.file(visible_index))
-            .cloned()
-        else {
+        let Some((file, multi_repo)) = self.results.as_ref().and_then(|results| {
+            Some((
+                results.file(visible_index)?.clone(),
+                results.outcome.repos > 1,
+            ))
+        }) else {
             return div().into_any_element();
         };
-        let expanded = self.expanded.contains(&file.path);
+        let key = file_key(&file);
+        let expanded = self.expanded.contains(&key);
         let theme = cx.theme();
         let (border, muted, header_bg) = (theme.border, theme.muted_foreground, theme.secondary);
-        let radius = theme.radius_lg;
+        let (radius, chip_bg) = (theme.radius, theme.background);
+        let radius_lg = theme.radius_lg;
         let mono_family = theme.mono_font_family.clone();
         let mono_size = theme.mono_font_size;
 
@@ -444,10 +645,12 @@ impl SearchApp {
             None => (String::new(), file.path.clone()),
         };
         let first_line = file.first_match_line().unwrap_or(1);
+        let root: PathBuf = file.repo.root.clone();
 
         let header = {
-            let (open_path, copy_path, reveal_path) =
-                (file.path.clone(), file.path.clone(), file.path.clone());
+            let (open_root, open_path) = (root.clone(), file.path.clone());
+            let (reveal_root, reveal_path) = (root.clone(), file.path.clone());
+            let copy_path = full_display_path(&root, &file.path);
             h_flex()
                 .gap_2()
                 .px_3()
@@ -455,10 +658,32 @@ impl SearchApp {
                 .bg(header_bg)
                 .border_b_1()
                 .border_color(border)
-                .child(Icon::new(Lucide::FileCode).small().text_color(muted))
+                .when(multi_repo, |row| {
+                    row.child(
+                        h_flex()
+                            .flex_none()
+                            .gap_1()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(radius)
+                            .border_1()
+                            .border_color(border)
+                            .bg(chip_bg)
+                            .text_xs()
+                            .child(Icon::new(Lucide::FolderGit2).xsmall().text_color(muted))
+                            .child(file.repo.name.clone())
+                            .when_some(file.repo.branch.clone(), |chip, branch| {
+                                chip.child(Icon::new(Lucide::GitBranch).xsmall().text_color(muted))
+                                    .child(div().text_color(muted).child(branch))
+                            }),
+                    )
+                })
+                .when(!multi_repo, |row| {
+                    row.child(Icon::new(Lucide::FileCode).small().text_color(muted))
+                })
                 .child(
                     h_flex()
-                        .id(SharedString::from(format!("open:{}", file.path)))
+                        .id(SharedString::from(format!("open:{key}")))
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
@@ -468,7 +693,7 @@ impl SearchApp {
                         .child(div().flex_none().text_color(muted).child(directory))
                         .child(div().flex_none().font_semibold().child(name))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_hit(&open_path, first_line, window, cx)
+                            this.open_hit(&open_root, &open_path, first_line, window, cx)
                         })),
                 )
                 .when_some(file.language, |row, language| {
@@ -488,7 +713,7 @@ impl SearchApp {
                         .child(format::plural(file.matched_lines, "match", "matches")),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("copy:{}", file.path)))
+                    Button::new(SharedString::from(format!("copy:{key}")))
                         .ghost()
                         .xsmall()
                         .icon(IconName::Copy)
@@ -498,12 +723,14 @@ impl SearchApp {
                         })),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("reveal:{}", file.path)))
+                    Button::new(SharedString::from(format!("reveal:{key}")))
                         .ghost()
                         .xsmall()
                         .icon(IconName::FolderOpen)
                         .tooltip("Reveal in file manager")
-                        .on_click(cx.listener(move |this, _, _, cx| this.reveal(&reveal_path, cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reveal(&reveal_root, &reveal_path, cx)
+                        })),
                 )
         };
 
@@ -517,14 +744,14 @@ impl SearchApp {
                 body = body.child(div().h_px().mx_3().my_1().bg(border));
             }
             for line in &snippet.lines {
-                body = body.child(self.render_line(&file.path, line, cx));
+                body = body.child(self.render_line(&file, &key, line, cx));
             }
         }
 
         let unkept = file.matched_lines - file.kept_lines();
         let footer = (hidden_lines > 0 || expanded || unkept > 0).then(|| {
-            let path = file.path.clone();
             let link = cx.theme().primary;
+            let toggle_key = key.clone();
             h_flex()
                 .gap_3()
                 .px_3()
@@ -535,7 +762,7 @@ impl SearchApp {
                 .when(hidden_lines > 0 || expanded, |row| {
                     row.child(
                         div()
-                            .id(SharedString::from(format!("more:{path}")))
+                            .id(SharedString::from(format!("more:{key}")))
                             .cursor_pointer()
                             .text_color(link)
                             .hover(|style| style.underline())
@@ -547,7 +774,7 @@ impl SearchApp {
                                 format!("Show {} more matches", format::count(hidden_lines))
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_expanded(visible_index, path.clone(), cx)
+                                this.toggle_expanded(visible_index, toggle_key.clone(), cx)
                             })),
                     )
                 })
@@ -566,7 +793,7 @@ impl SearchApp {
                 v_flex()
                     .border_1()
                     .border_color(border)
-                    .rounded(radius)
+                    .rounded(radius_lg)
                     .overflow_hidden()
                     .child(header)
                     .child(body)
@@ -575,7 +802,13 @@ impl SearchApp {
             .into_any_element()
     }
 
-    fn render_line(&self, path: &str, line: &SnippetLine, cx: &Context<Self>) -> impl IntoElement {
+    fn render_line(
+        &self,
+        file: &FileMatch,
+        key: &str,
+        line: &SnippetLine,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let highlight = HighlightStyle {
             background_color: Some(
@@ -598,10 +831,10 @@ impl SearchApp {
         );
         let (hover, muted) = (theme.list_hover, theme.muted_foreground);
         let number = line.number;
-        let open_path = path.to_string();
+        let (root, path) = (file.repo.root.clone(), file.path.clone());
 
         h_flex()
-            .id(SharedString::from(format!("line:{path}:{number}")))
+            .id(SharedString::from(format!("line:{key}:{number}")))
             .cursor_pointer()
             .hover(move |style| style.bg(hover))
             .child(
@@ -623,11 +856,9 @@ impl SearchApp {
                     .when(!line.is_match, |text| text.text_color(muted))
                     .child(styled),
             )
-            .on_click(
-                cx.listener(move |this, _, window, cx| {
-                    this.open_hit(&open_path, number, window, cx)
-                }),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_hit(&root, &path, number, window, cx)
+            }))
     }
 
     // ----- empty states ---------------------------------------------------------
@@ -635,11 +866,7 @@ impl SearchApp {
     fn render_tips(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let name = self
-            .folder
-            .as_ref()
-            .map(|folder| folder.workspace.name())
-            .unwrap_or_default();
+        let in_scope = self.in_scope().count();
         let tip = |key: &'static str, text: &'static str| {
             h_flex()
                 .gap_3()
@@ -660,12 +887,10 @@ impl SearchApp {
             .justify_center()
             .gap_4()
             .child(Icon::new(Lucide::TextSearch).large().text_color(muted))
-            .child(
-                div()
-                    .text_lg()
-                    .font_semibold()
-                    .child(format!("Search {name}")),
-            )
+            .child(div().text_lg().font_semibold().child(format!(
+                "Search {}",
+                format::plural(in_scope, "repository", "repositories")
+            )))
             .child(
                 v_flex()
                     .gap_1p5()
@@ -675,44 +900,14 @@ impl SearchApp {
                     .child(tip("Alt+R  .*", "Regular expression"))
                     .child(tip("src  *.rs", "Path filter keeps matching paths"))
                     .child(tip("!tests  -*.md", "Path filter drops matching paths"))
+                    .child(tip("Narrow by tag", "Pick which repositories to search"))
                     .child(tip("Click a line", "Open it in your editor")),
             )
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (muted, hover, radius) = (theme.muted_foreground, theme.list_hover, theme.radius);
-
-        let recent = self.recent.iter().map(|path: &PathBuf| {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| display_path(path));
-            let target = path.clone();
-            h_flex()
-                .id(SharedString::from(format!("recent:{}", path.display())))
-                .gap_3()
-                .px_3()
-                .py_2()
-                .rounded(radius)
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover))
-                .child(Icon::new(IconName::Folder).small().text_color(muted))
-                .child(div().flex_none().font_semibold().child(name))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_sm()
-                        .text_color(muted)
-                        .child(display_path(path)),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_folder(target.clone(), window, cx)
-                }))
-        });
-
+        let muted = theme.muted_foreground;
         v_flex()
             .flex_1()
             .size_full()
@@ -720,31 +915,29 @@ impl SearchApp {
             .justify_center()
             .gap_4()
             .child(Icon::new(Lucide::TextSearch).size(px(48.)).text_color(theme.primary))
-            .child(div().text_2xl().font_semibold().child("tgrep"))
+            .child(div().text_2xl().font_semibold().child("Search across your repositories"))
             .child(
                 div()
-                    .max_w(px(520.))
+                    .max_w(px(560.))
                     .text_center()
                     .text_color(muted)
-                    .child("Fast code search backed by a trigram index. Each folder keeps its index in a .tgrep directory, shared with the tgrep CLI."),
+                    .child("Add the repositories you work with. Each gets a trigram index in its .tgrep directory, shared with the tgrep CLI. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
             )
             .child(
-                Button::new("welcome-open")
+                Button::new("welcome-add")
                     .primary()
                     .icon(IconName::FolderOpen)
-                    .label("Open Folder…")
-                    .on_click(cx.listener(|this, _, window, cx| this.prompt_for_folder(window, cx))),
+                    .label("Add Repositories…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.prompt_for_repositories(window, cx)
+                    })),
             )
-            .when(!self.recent.is_empty(), |welcome| {
-                welcome.child(
-                    v_flex()
-                        .w(px(560.))
-                        .mt_4()
-                        .gap_0p5()
-                        .child(div().px_3().pb_1().text_xs().font_semibold().text_color(muted).child("RECENT"))
-                        .children(recent),
-                )
-            })
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Choosing a folder that holds several git repositories adds each of them."),
+            )
     }
 
     // ----- status bar -------------------------------------------------------------
@@ -752,7 +945,8 @@ impl SearchApp {
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let mut bar = h_flex()
+        let danger = theme.danger;
+        let bar = h_flex()
             .flex_none()
             .gap_3()
             .px_3()
@@ -762,69 +956,151 @@ impl SearchApp {
             .bg(theme.status_bar)
             .text_xs()
             .text_color(muted);
+        if self.repos.is_empty() {
+            return bar.child("No repositories yet");
+        }
 
-        let Some(folder) = self.folder.as_ref() else {
-            return bar.child("No folder open");
-        };
-        bar = bar
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(folder.workspace.display_root()),
-            )
-            .child(div().flex_1());
+        let in_scope: Vec<&RepoState> = self.in_scope().collect();
+        let building = self
+            .repos
+            .iter()
+            .find(|repo| repo.index == IndexActivity::Building);
+        let queued = self
+            .repos
+            .iter()
+            .filter(|repo| repo.index == IndexActivity::Queued)
+            .count();
+        let loading = self
+            .repos
+            .iter()
+            .filter(|repo| repo.index == IndexActivity::Loading)
+            .count();
+        let failed = self
+            .repos
+            .iter()
+            .filter(|repo| {
+                matches!(
+                    repo.index,
+                    IndexActivity::Failed(_) | IndexActivity::Missing
+                )
+            })
+            .count();
+        let changed: usize = in_scope.iter().map(|repo| repo.changed_files).sum();
 
-        let building = matches!(folder.index, IndexActivity::Building);
-        let status = match &folder.index {
-            IndexActivity::Loading => "Loading index…".to_string(),
-            IndexActivity::Building => "Building index…".to_string(),
-            IndexActivity::Failed(error) => format!("Indexing failed: {error}"),
-            IndexActivity::Idle(IndexStatus::Missing) => "No index yet".to_string(),
-            IndexActivity::Idle(IndexStatus::Unusable) => {
-                "Index unusable, scanning files".to_string()
-            }
-            IndexActivity::Idle(IndexStatus::Ready { files, updated_at }) => format!(
-                "Indexed {} · updated {}",
-                format::plural(*files as usize, "file", "files"),
-                format::ago(*updated_at, SystemTime::now())
-            ),
+        let activity = if let Some(repo) = building {
+            Some(if queued > 0 {
+                format!("Indexing {} ({queued} queued)…", repo.info.name)
+            } else {
+                format!("Indexing {}…", repo.info.name)
+            })
+        } else if loading > 0 {
+            Some(format!(
+                "Loading {}…",
+                format::plural(loading, "index", "indexes")
+            ))
+        } else {
+            None
         };
-        let changed = folder.changed_files;
-        bar.when(building || matches!(folder.index, IndexActivity::Loading), |bar| {
-            bar.child(Spinner::new().xsmall())
+
+        bar.child(format!(
+            "{} · {} in scope",
+            format::plural(self.repos.len(), "repository", "repositories"),
+            in_scope.len()
+        ))
+        .child(div().flex_1())
+        .when_some(activity, |bar, activity| {
+            bar.child(Spinner::new().xsmall()).child(activity)
         })
-        .child(status)
+        .when(failed > 0, |bar| {
+            bar.child(
+                div()
+                    .id("status-failed")
+                    .cursor_pointer()
+                    .text_color(danger)
+                    .hover(|style| style.underline())
+                    .child(format!("{} need attention", format::plural(failed, "repository", "repositories")))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_page(Page::Repositories, window, cx)
+                    })),
+            )
+        })
         .when(changed > 0, |bar| {
             bar.child(
                 div()
                     .id("changed-files")
-                    .child(format!("· {} changed", format::plural(changed, "file", "files")))
+                    .child(format!("{} changed since indexing", format::plural(changed, "file", "files")))
                     .tooltip(|window, cx| {
                         Tooltip::new(
-                            "Files changed since the index was built. Searches read them directly, so results stay current.",
+                            "Files changed since their repository was indexed. Searches read them directly, so results stay current.",
                         )
                         .build(window, cx)
                     }),
             )
         })
         .child(
-            Button::new("rebuild-index")
+            Button::new("rebuild-scope")
                 .ghost()
                 .xsmall()
                 .icon(Lucide::RefreshCw)
-                .label("Rebuild index")
-                .tooltip("Re-index the folder to pick up changes (Ctrl+Shift+R)")
-                .disabled(building)
-                .on_click(cx.listener(|this, _, _, cx| this.build_index(cx))),
+                .label("Rebuild indexes")
+                .tooltip("Re-index the repositories in scope (Ctrl+Shift+R)")
+                .disabled(in_scope.is_empty())
+                .on_click(cx.listener(|this, _, _, cx| this.queue_scope_indexes(cx))),
         )
     }
 }
 
-/// What clicking a facet row, and its section's "Clear", does.
-struct FacetHandlers {
-    toggle: fn(&mut SearchApp, String, &mut Context<SearchApp>),
-    clear: fn(&mut SearchApp, &mut Context<SearchApp>),
+/// One-line description of a repository's index, for the status bar and the
+/// repositories page.
+pub(super) fn index_summary(repo: &RepoState) -> String {
+    let changed = match repo.changed_files {
+        0 => String::new(),
+        n => format!(" · {} changed", format::plural(n, "file", "files")),
+    };
+    match &repo.index {
+        IndexActivity::Loading => "Loading index…".into(),
+        IndexActivity::Queued => "Waiting to index…".into(),
+        IndexActivity::Building => "Indexing…".into(),
+        IndexActivity::Missing => "Folder not found".into(),
+        IndexActivity::Failed(error) => format!("Indexing failed: {error}"),
+        IndexActivity::Idle(IndexStatus::Missing) => "No index yet".into(),
+        IndexActivity::Idle(IndexStatus::Unusable) => "Index unusable, scanning files".into(),
+        IndexActivity::Idle(IndexStatus::Ready { files, updated_at }) => format!(
+            "{} indexed · updated {}{changed}",
+            format::plural(*files as usize, "file", "files"),
+            format::ago(*updated_at, SystemTime::now())
+        ),
+    }
+}
+
+/// How a tag reads on a chip: `owner: alice`, `branch: main`, `mirror`.
+pub(super) fn tag_label(tag: &str) -> String {
+    match repo::tag_group(tag) {
+        "" => tag.to_string(),
+        group => format!("{group}: {}", tag_value(tag)),
+    }
+}
+
+/// The part of a tag after its group key.
+fn tag_value(tag: &str) -> &str {
+    match repo::tag_group(tag) {
+        "" => tag,
+        group => &tag[group.len() + 1..],
+    }
+}
+
+fn group_title(group: &str) -> String {
+    match group {
+        "" => "Tags".into(),
+        BRANCH_GROUP => "Branch".into(),
+        other => FacetKind::Tags(other.to_string()).title(),
+    }
+}
+
+fn full_display_path(root: &std::path::Path, path: &str) -> String {
+    root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// An icon toggle inside the search input.
@@ -849,7 +1125,12 @@ fn option_toggle(
         .tooltip(tooltip)
 }
 
-fn centered_message(cx: &App, icon: Icon, title: &'static str, detail: String) -> impl IntoElement {
+pub(super) fn centered_message(
+    cx: &App,
+    icon: Icon,
+    title: &'static str,
+    detail: String,
+) -> impl IntoElement {
     v_flex()
         .flex_1()
         .size_full()

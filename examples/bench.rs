@@ -5,7 +5,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
-use tgrep_gpui::engine::search::{self, SearchLimits};
+use tgrep_gpui::engine::repo::RepoInfo;
+use tgrep_gpui::engine::search::{self, SearchLimits, SearchSource};
 use tgrep_gpui::engine::workspace::{IndexStatus, Workspace};
 
 fn main() -> anyhow::Result<()> {
@@ -25,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         println!("index built in {:.2?}", started.elapsed());
     }
     let started = Instant::now();
-    let corpus = workspace.load_corpus();
+    let corpus = std::sync::Arc::new(workspace.load_corpus());
     println!(
         "corpus loaded in {:.2?}: {} files, indexed: {}",
         started.elapsed(),
@@ -33,6 +34,17 @@ fn main() -> anyhow::Result<()> {
         corpus.is_indexed()
     );
 
+    let source = SearchSource {
+        repo: std::sync::Arc::new(RepoInfo {
+            id: folder.clone(),
+            name: workspace.name(),
+            root: workspace.root().to_path_buf(),
+            branch: None,
+            tags: vec![],
+        }),
+        corpus,
+        changed: vec![],
+    };
     for pattern in patterns {
         let query = SearchQuery {
             pattern: pattern.clone(),
@@ -40,8 +52,7 @@ fn main() -> anyhow::Result<()> {
         };
         let compiled = CompiledQuery::new(&query).map_err(anyhow::Error::msg)?;
         let outcome = search::search(
-            &corpus,
-            &[],
+            std::slice::from_ref(&source),
             &compiled,
             &SearchLimits::default(),
             &AtomicBool::new(false),
