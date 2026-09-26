@@ -60,6 +60,18 @@ you develop in.
 - **Results as snippets**, coloured by language with tree-sitter grammars: every match
   is highlighted, with one line of context. Long files collapse to their first
   matches ("Show N more matches").
+- **Results as a table**, for analysis: the Table switch above the results (`Alt+T`,
+  `Cmd+Alt+T` on macOS) lists one row per matching line, with its repository,
+  branch, path, line, column, language, the matched text and the line itself. When
+  the query's regex has capture groups, each gets a column, named after the group:
+  `/version = "(?<version>[^"]+)"/` tabulates versions. Click a header to sort
+  (numbers numerically), drag its edge to resize, click a row to preview it and
+  double-click to open it. Export writes the rows, in the table's order and under
+  the facet filters, as CSV (with a byte order mark, for Excel), TSV, Markdown or
+  JSON (`Ctrl+Shift+E` for CSV), or copies them as TSV to paste into a spreadsheet
+  or as Markdown. Rows are the kept lines: up to 200 per file and about 20,000 in all.
+  When every row comes from one repository, the table hides its name and branch;
+  exports always include them.
 - **Search tabs.** Keep several searches open and switch between them without
   running them again: `Ctrl+T` opens a tab, `Ctrl+W` closes it, `Ctrl+Tab` and
   `Ctrl+Shift+Tab` (or `Ctrl+PageDown/PageUp`) step through them, and a middle click
@@ -126,8 +138,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `highlight.rs` colours code by language. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `highlight.rs` colours code by language. |
 | `src/cli.rs` | The command line. |
 | `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
 | `src/shell.rs` | Explorer integration on Windows. |

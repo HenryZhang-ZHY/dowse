@@ -13,6 +13,7 @@ use regex::Regex;
 
 use super::app::{SearchApp, SnippetSyntax};
 use super::preview::Preview;
+use super::table::{ResultsView, TableView};
 use super::windows::Windows;
 use tgrep_gpui::engine::facets::{FacetFilter, Facets};
 use tgrep_gpui::engine::query::SearchQuery;
@@ -44,6 +45,10 @@ pub(super) struct SearchTab {
     pub(super) stale: bool,
     /// The result file shown beside the results.
     pub(super) preview: Option<Preview>,
+    pub(super) view: ResultsView,
+    /// The results as a table, built when first shown and dropped when the
+    /// results or facet filters change.
+    pub(super) table: Option<TableView>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -117,6 +122,7 @@ impl SearchTab {
 
     /// Re-apply the facet filters and reset the list to the top.
     pub(super) fn refresh_visible(&mut self) {
+        self.table = None;
         let count = match self.results.as_mut() {
             Some(results) => {
                 let files = &results.outcome.files;
@@ -180,6 +186,8 @@ impl SearchApp {
             search_cancel: Arc::new(AtomicBool::new(false)),
             stale: true,
             preview: None,
+            view: ResultsView::default(),
+            table: None,
             _subscriptions: subscriptions,
         }
     }

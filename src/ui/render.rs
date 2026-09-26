@@ -2,6 +2,7 @@
 //! facet sidebar, result cards and the status bar.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -10,6 +11,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::table::DataTable;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
@@ -19,15 +21,17 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::CONTEXT;
-use super::app::{Page, SearchApp};
+use super::app::{AppCommand, Page, SearchApp};
 use super::highlight::LineStyles;
 use super::hub::{IndexActivity, RepoView};
+use super::table::ResultsView;
 use super::tabs::file_key;
 use super::windows::Windows;
 use crate::format;
 use tgrep_gpui::engine::facets::FacetKind;
 use tgrep_gpui::engine::repo::{self, BRANCH_GROUP};
 use tgrep_gpui::engine::search::{FileMatch, Snippet, SnippetLine};
+use tgrep_gpui::engine::table::ExportFormat;
 use tgrep_gpui::engine::workspace;
 
 /// Matching lines shown per file before "Show more".
@@ -82,6 +86,10 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_close_preview))
             .on_action(cx.listener(Self::on_next_match))
             .on_action(cx.listener(Self::on_previous_match))
+            .on_action(cx.listener(Self::on_toggle_results_view))
+            .on_action(cx.listener(Self::on_export_results))
+            .on_action(cx.listener(Self::on_copy_results_as_tsv))
+            .on_action(cx.listener(Self::on_copy_results_as_markdown))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths.paths(), window, cx)
             }))
@@ -714,7 +722,16 @@ impl SearchApp {
     }
 
     fn render_results(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = window;
+        let table = if self.tab().view == ResultsView::Table {
+            self.ensure_table(window, cx)
+        } else {
+            None
+        };
+        let controls = self
+            .tab()
+            .results
+            .is_some()
+            .then(|| self.render_view_controls(cx));
         let theme = cx.theme();
         let muted = theme.muted_foreground;
 
@@ -722,13 +739,21 @@ impl SearchApp {
             .flex_none()
             .gap_2()
             .px_4()
-            .py_2()
+            .py_1p5()
+            .min_h(px(36.))
             .text_sm()
             .text_color(muted)
             .when(self.tab().searching, |row| {
                 row.child(Spinner::new().small())
             })
-            .child(self.summary_text());
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(self.summary_text()),
+            )
+            .children(controls);
 
         let repos = self.repo_views(cx);
         let content = if let Some(error) = self.tab().query_error.clone() {
@@ -774,6 +799,15 @@ impl SearchApp {
                 },
             )
             .into_any_element()
+        } else if let Some(table) = table {
+            div()
+                .flex_1()
+                .min_h_0()
+                .size_full()
+                .px_4()
+                .pb_3()
+                .child(DataTable::new(&table).stripe(true).small())
+                .into_any_element()
         } else {
             div()
                 .id("results")
@@ -798,6 +832,90 @@ impl SearchApp {
             .h_full()
             .child(summary)
             .child(content)
+    }
+
+    /// Switch between snippets and the table, and export or copy the rows.
+    fn render_view_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let view = self.tab().view;
+        let app = cx.entity().downgrade();
+        let item = move |label: String, icon: Icon, run: AppCommand| {
+            let app = app.clone();
+            PopupMenuItem::new(label)
+                .icon(icon)
+                .on_click(move |_, window, cx| {
+                    app.update(cx, |this, cx| run(this, window, cx)).ok();
+                })
+        };
+        let view_button = |id: &'static str, target: ResultsView, icon: Lucide, label, tooltip| {
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .icon(icon)
+                .label(label)
+                .selected(view == target)
+                .tooltip(tooltip)
+                .on_click(cx.listener(move |this, _, window, cx| this.set_view(target, window, cx)))
+        };
+
+        h_flex()
+            .flex_none()
+            .gap_0p5()
+            .child(view_button(
+                "view-snippets",
+                ResultsView::Snippets,
+                Lucide::Rows3,
+                "Snippets",
+                "Matches in their code (Alt+T switches)",
+            ))
+            .child(view_button(
+                "view-table",
+                ResultsView::Table,
+                Lucide::Table,
+                "Table",
+                "One row per matching line, sortable (Alt+T switches)",
+            ))
+            .child(
+                Button::new("export-results")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Download)
+                    .label("Export")
+                    .dropdown_caret(true)
+                    .tooltip("Save or copy the matching lines as a table")
+                    .dropdown_menu(move |menu, _, _| {
+                        let mut menu = menu;
+                        for format in ExportFormat::ALL {
+                            let shortcut = if format == ExportFormat::Csv {
+                                " (Ctrl+Shift+E)"
+                            } else {
+                                ""
+                            };
+                            menu = menu.item(item(
+                                format!("Export as {}…{shortcut}", format.label()),
+                                Icon::new(Lucide::Download),
+                                Rc::new(move |this, window, cx| {
+                                    this.export_results(format, window, cx)
+                                }),
+                            ));
+                        }
+                        menu.separator()
+                            .item(item(
+                                "Copy as TSV, for spreadsheets".into(),
+                                Icon::new(IconName::Copy),
+                                Rc::new(|this, window, cx| {
+                                    this.copy_results(ExportFormat::Tsv, window, cx)
+                                }),
+                            ))
+                            .item(item(
+                                "Copy as Markdown".into(),
+                                Icon::new(IconName::Copy),
+                                Rc::new(|this, window, cx| {
+                                    this.copy_results(ExportFormat::Markdown, window, cx)
+                                }),
+                            ))
+                    }),
+            )
+            .into_any_element()
     }
 
     fn summary_text(&self) -> String {

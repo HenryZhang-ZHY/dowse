@@ -59,6 +59,16 @@ pub struct SnippetLine {
     /// Byte ranges of `text` to highlight. Empty for context lines.
     pub highlights: Vec<Range<usize>>,
     pub is_match: bool,
+    /// A matching line as the file has it, when `text` differs from it.
+    original: Option<String>,
+}
+
+impl SnippetLine {
+    /// The line as the file has it, without tab expansion or clipping; for
+    /// context lines, the displayed text.
+    pub fn source(&self) -> &str {
+        self.original.as_deref().unwrap_or(&self.text)
+    }
 }
 
 /// A run of consecutive lines: matches plus their context.
@@ -415,16 +425,16 @@ fn build_snippets(text: &str, hits: &[Hit], limits: &SearchLimits) -> Vec<Snippe
     let mut snippets: Vec<Snippet> = Vec::new();
     let mut previous: Option<usize> = None;
     for (index, (start, end, ranges)) in lines {
-        let (display, highlights) = display_line(
-            &text[start..end],
-            ranges.unwrap_or(&[]),
-            limits.max_line_len,
-        );
+        let source = &text[start..end];
+        let (display, highlights) =
+            display_line(source, ranges.unwrap_or(&[]), limits.max_line_len);
+        let is_match = ranges.is_some();
         let line = SnippetLine {
             number: index + 1,
+            original: (is_match && display != source).then(|| source.to_string()),
             text: display,
             highlights,
-            is_match: ranges.is_some(),
+            is_match,
         };
         match (previous, snippets.last_mut()) {
             (Some(prev), Some(snippet)) if prev + 1 == index => snippet.lines.push(line),

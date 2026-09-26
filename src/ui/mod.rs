@@ -9,6 +9,7 @@ mod preview;
 mod render;
 mod repos;
 mod repos_page;
+mod table;
 mod tabs;
 mod windows;
 mod workspace;
@@ -46,6 +47,10 @@ actions!(
         ClosePreview,
         NextMatch,
         PreviousMatch,
+        ToggleResultsView,
+        ExportResults,
+        CopyResultsAsTsv,
+        CopyResultsAsMarkdown,
         Quit,
     ]
 );
@@ -73,6 +78,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("escape", ClosePreview, Some(CONTEXT)),
         KeyBinding::new("f4", NextMatch, Some(CONTEXT)),
         KeyBinding::new("shift-f4", PreviousMatch, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-e", ExportResults, Some(CONTEXT)),
     ]);
     // VS Code's search toggles. On macOS plain alt-letter types a character.
     #[cfg(target_os = "macos")]
@@ -80,6 +86,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("cmd-alt-c", ToggleCaseSensitive, Some(CONTEXT)),
         KeyBinding::new("cmd-alt-w", ToggleWholeWord, Some(CONTEXT)),
         KeyBinding::new("cmd-alt-r", ToggleRegex, Some(CONTEXT)),
+        KeyBinding::new("cmd-alt-t", ToggleResultsView, Some(CONTEXT)),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
     #[cfg(not(target_os = "macos"))]
@@ -87,6 +94,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("alt-c", ToggleCaseSensitive, Some(CONTEXT)),
         KeyBinding::new("alt-w", ToggleWholeWord, Some(CONTEXT)),
         KeyBinding::new("alt-r", ToggleRegex, Some(CONTEXT)),
+        KeyBinding::new("alt-t", ToggleResultsView, Some(CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &NewWindow, cx| {

@@ -61,6 +61,9 @@ pub struct SearchApp {
 /// Styles for every line of every snippet of a file.
 pub(super) type SnippetSyntax = Vec<Vec<LineStyles>>;
 
+/// Something to do to a window, as a menu item or palette command does.
+pub(super) type AppCommand = Rc<dyn Fn(&mut SearchApp, &mut Window, &mut Context<SearchApp>)>;
+
 /// The search tabs a window starts with.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TabsOpening {

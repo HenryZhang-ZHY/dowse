@@ -16,5 +16,6 @@ pub mod search;
 pub mod session;
 mod store;
 pub mod syntax;
+pub mod table;
 pub mod watch;
 pub mod workspace;
