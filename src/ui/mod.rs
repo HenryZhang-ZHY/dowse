@@ -8,6 +8,7 @@ mod hub;
 mod render;
 mod repos;
 mod repos_page;
+mod tabs;
 mod windows;
 mod workspace;
 
@@ -37,6 +38,10 @@ actions!(
         NewWorkspace,
         OpenWorkspace,
         SaveWorkspaceAs,
+        NewTab,
+        CloseTab,
+        NextTab,
+        PreviousTab,
         Quit,
     ]
 );
@@ -55,6 +60,12 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("secondary-shift-n", NewWindow, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-o", OpenWorkspace, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-s", SaveWorkspaceAs, Some(CONTEXT)),
+        KeyBinding::new("secondary-t", NewTab, Some(CONTEXT)),
+        KeyBinding::new("secondary-w", CloseTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-tab", NextTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-pagedown", NextTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-pageup", PreviousTab, Some(CONTEXT)),
     ]);
     // VS Code's search toggles. On macOS plain alt-letter types a character.
     #[cfg(target_os = "macos")]

@@ -67,6 +67,7 @@ impl ConfigDir {
                 workspace: Some(default.clone()),
                 repos: Vec::new(),
                 scope: registry.scope.clone(),
+                ..Default::default()
             });
             session.remember(&default);
             session.scopes.insert(default, registry.scope.clone());

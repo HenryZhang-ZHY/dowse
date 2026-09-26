@@ -2,10 +2,12 @@
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 use tgrep_core::query::{self, QueryPlan};
 
 /// Everything the search bar describes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SearchQuery {
     pub pattern: String,
     pub case_sensitive: bool,

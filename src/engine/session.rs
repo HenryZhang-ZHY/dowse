@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::query::SearchQuery;
 use super::store;
 
 /// Recent workspace files kept.
@@ -36,6 +37,16 @@ pub struct WindowSession {
     pub repos: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<String>,
+    /// The window's search tabs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<SearchQuery>,
+    /// The tab shown, an index into `tabs`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub active_tab: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl Session {
@@ -78,11 +89,24 @@ mod tests {
                     workspace: Some("/w/team.tgrep-workspace".into()),
                     repos: vec![],
                     scope: vec!["dev".into()],
+                    tabs: vec![
+                        SearchQuery {
+                            pattern: "fn main".into(),
+                            ..Default::default()
+                        },
+                        SearchQuery {
+                            pattern: r"todo\(".into(),
+                            regex: true,
+                            path_filter: "*.rs".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    active_tab: 1,
                 },
                 WindowSession {
                     workspace: None,
                     repos: vec!["/src/api".into()],
-                    scope: vec![],
+                    ..Default::default()
                 },
             ],
             ..Default::default()

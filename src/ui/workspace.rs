@@ -28,7 +28,7 @@ impl SearchApp {
     }
 
     /// What the session remembers about this window.
-    pub(super) fn session_state(&self) -> WindowSession {
+    pub(super) fn session_state(&self, cx: &App) -> WindowSession {
         WindowSession {
             workspace: self.workspace.clone(),
             repos: match self.workspace {
@@ -36,6 +36,8 @@ impl SearchApp {
                 None => self.members.iter().map(PathBuf::from).collect(),
             },
             scope: self.scope.tags().map(str::to_string).collect(),
+            tabs: self.tab_queries(cx),
+            active_tab: self.active_tab,
         }
     }
 

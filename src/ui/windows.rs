@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::Root;
 use gpui_kit::*;
 
-use super::app::SearchApp;
+use super::app::{SearchApp, TabsOpening};
 use super::hub::RepoHub;
 use crate::cli::Command;
 use tgrep_gpui::engine::config::ConfigDir;
@@ -101,6 +101,10 @@ impl Windows {
     pub(super) fn start(command: Command, cx: &mut App) {
         let restored: Vec<WindowSession> = cx.global::<Self>().session.windows.clone();
         for window in restored {
+            let tabs = TabsOpening {
+                queries: window.tabs,
+                active: window.active_tab,
+            };
             let opening = match window.workspace {
                 Some(file) => Opening::Saved(file),
                 None => Opening::Untitled {
@@ -112,7 +116,7 @@ impl Windows {
                     scope: window.scope,
                 },
             };
-            Self::open_window(opening, cx);
+            Self::open_window_with_tabs(opening, tabs, cx);
         }
         Self::run(command, cx);
         if cx.global::<Self>().open.is_empty() {
@@ -214,6 +218,15 @@ impl Windows {
 
     /// Open a window on `opening`.
     fn open_window(opening: Opening, cx: &mut App) -> Option<OpenWindow> {
+        Self::open_window_with_tabs(opening, TabsOpening::default(), cx)
+    }
+
+    /// Open a window on `opening` with the search tabs of `tabs`.
+    fn open_window_with_tabs(
+        opening: Opening,
+        tabs: TabsOpening,
+        cx: &mut App,
+    ) -> Option<OpenWindow> {
         let offset = px(CASCADE * (cx.global::<Self>().open.len() % 8) as f32);
         let mut bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         bounds.origin.x += offset;
@@ -230,7 +243,7 @@ impl Windows {
         let mut app = None;
         let handle = cx
             .open_window(options, |window, cx| {
-                let view = cx.new(|cx| SearchApp::new(opening, window, cx));
+                let view = cx.new(|cx| SearchApp::new(opening, tabs, window, cx));
                 app = Some(view.downgrade());
                 // `Root` hosts notifications, dialogs and tooltips.
                 cx.new(|cx| Root::new(view, window, cx))
@@ -379,7 +392,7 @@ impl Windows {
             .open
             .iter()
             .filter_map(|window| window.app.upgrade())
-            .map(|app| app.read(cx).session_state())
+            .map(|app| app.read(cx).session_state(cx))
             .collect();
         let quitting = cx.windows().is_empty();
         let windows = cx.global_mut::<Self>();

@@ -1,12 +1,12 @@
-//! State and behaviour of the main view: the query, running searches over the
-//! repositories in scope, and facet filtering of the results. Repository
-//! management lives in `repos.rs`; rendering in `render.rs` and `repos_page.rs`.
+//! State and behaviour of the main view: running each tab's query over the
+//! repositories in scope, and facet filtering of the results. Tabs live in
+//! `tabs.rs`, repository management in `repos.rs`; rendering in `render.rs`
+//! and `repos_page.rs`.
 
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -17,17 +17,18 @@ use gpui_kit::*;
 use super::highlight::{self, Highlighters, LineStyles};
 use super::hub::RepoHub;
 use super::repos::TagInputs;
+use super::tabs::SearchTab;
 use super::windows::{Opening, Windows};
 use super::{
-    AddRepository, FocusPathFilter, FocusSearch, NewWorkspace, OpenWorkspace, RebuildIndex,
-    SaveWorkspaceAs, ShowRepositories, ToggleCaseSensitive, ToggleRegex, ToggleTheme,
-    ToggleWholeWord,
+    AddRepository, CloseTab, FocusPathFilter, FocusSearch, NewTab, NewWorkspace, NextTab,
+    OpenWorkspace, PreviousTab, RebuildIndex, SaveWorkspaceAs, ShowRepositories,
+    ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
 };
 use crate::editor::{self, Launch};
-use tgrep_gpui::engine::facets::{FacetFilter, FacetKind, Facets};
+use tgrep_gpui::engine::facets::{FacetFilter, FacetKind};
 use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
 use tgrep_gpui::engine::repo::Scope;
-use tgrep_gpui::engine::search::{self, FileMatch, SearchLimits, SearchOutcome};
+use tgrep_gpui::engine::search::{self, SearchLimits};
 
 /// Pause after a keystroke before searching, so typing a word runs one search.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);
@@ -49,61 +50,34 @@ pub struct SearchApp {
     pub(super) members: Vec<String>,
     pub(super) tag_inputs: TagInputs,
     pub(super) scope: Scope,
-    pub(super) search_input: Entity<InputState>,
-    pub(super) path_input: Entity<InputState>,
-    pub(super) case_sensitive: bool,
-    pub(super) whole_word: bool,
-    pub(super) regex: bool,
-    pub(super) results: Option<Results>,
-    pub(super) query_error: Option<String>,
-    /// A search is running (or waiting for repositories to load).
-    pub(super) searching: bool,
-    pub(super) facet_filter: FacetFilter,
-    /// Files whose every kept line is shown, keyed by [`file_key`].
-    pub(super) expanded: HashSet<String>,
-    pub(super) list_state: ListState,
-    pub(super) search_task: Option<Task<()>>,
-    pub(super) search_cancel: Arc<AtomicBool>,
+    /// Open searches; never empty.
+    pub(super) tabs: Vec<SearchTab>,
+    pub(super) active_tab: usize,
+    pub(super) next_tab_id: usize,
     pub(super) highlighters: Highlighters,
     _subscriptions: Vec<Subscription>,
-}
-
-/// A finished search and the facet view over it.
-pub(super) struct Results {
-    pub(super) outcome: Arc<SearchOutcome>,
-    pub(super) facets: Facets,
-    /// Indexes into `outcome.files` that pass the facet filters.
-    pub(super) visible: Vec<usize>,
-    /// Syntax styles of each file's snippets, by index into `outcome.files`,
-    /// computed as files are first shown.
-    pub(super) syntax: HashMap<usize, Rc<SnippetSyntax>>,
 }
 
 /// Styles for every line of every snippet of a file.
 pub(super) type SnippetSyntax = Vec<Vec<LineStyles>>;
 
-impl Results {
-    pub(super) fn file(&self, visible_index: usize) -> Option<&FileMatch> {
-        let index = *self.visible.get(visible_index)?;
-        self.outcome.files.get(index)
-    }
-}
-
-/// Identifies a result file across repositories.
-pub(super) fn file_key(file: &FileMatch) -> String {
-    format!("{}\u{0}{}", file.repo.id, file.path)
+/// The search tabs a window starts with.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TabsOpening {
+    pub(super) queries: Vec<SearchQuery>,
+    pub(super) active: usize,
 }
 
 impl SearchApp {
-    /// A window showing `opening`.
-    pub(super) fn new(opening: Opening, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search code…"));
-        let path_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter paths: src *.rs !test"));
+    /// A window showing `opening`, with the search tabs of `tabs`.
+    pub(super) fn new(
+        opening: Opening,
+        tabs: TabsOpening,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let hub = RepoHub::global(cx);
         let subscriptions = vec![
-            cx.subscribe_in(&search_input, window, Self::on_input_event),
-            cx.subscribe_in(&path_input, window, Self::on_input_event),
             cx.subscribe_in(&hub, window, Self::on_hub_event),
             cx.observe(&hub, |_, _, cx| cx.notify()),
             cx.observe_global::<Theme>(|this, cx| this.theme_changed(cx)),
@@ -121,7 +95,6 @@ impl SearchApp {
             app.update(cx, |this, cx| this.should_close(window, cx))
                 .unwrap_or(true)
         });
-        search_input.update(cx, |input, cx| input.focus(window, cx));
 
         let mut this = Self {
             page: Page::Search,
@@ -131,22 +104,25 @@ impl SearchApp {
             members: Vec::new(),
             tag_inputs: TagInputs::default(),
             scope: Scope::default(),
-            search_input,
-            path_input,
-            case_sensitive: false,
-            whole_word: false,
-            regex: false,
-            results: None,
-            query_error: None,
-            searching: false,
-            facet_filter: FacetFilter::default(),
-            expanded: HashSet::new(),
-            list_state: ListState::new(0, ListAlignment::Top, px(800.)),
-            search_task: None,
-            search_cancel: Arc::new(AtomicBool::new(false)),
+            tabs: Vec::new(),
+            active_tab: 0,
+            next_tab_id: 0,
             highlighters: Highlighters::default(),
             _subscriptions: subscriptions,
         };
+        let mut queries = tabs.queries;
+        if queries.is_empty() {
+            queries.push(SearchQuery::default());
+        }
+        for query in queries {
+            let tab = this.create_tab(query, window, cx);
+            this.tabs.push(tab);
+        }
+        this.active_tab = tabs.active.min(this.tabs.len() - 1);
+        this.tab()
+            .search_input
+            .update(cx, |input, cx| input.focus(window, cx));
+
         // Load the workspace now, so requests right after opening (such as
         // `--add`) see its repositories.
         let mut errors = Windows::take_startup_errors(cx);
@@ -160,25 +136,32 @@ impl SearchApp {
         this
     }
 
-    /// Forget the query's results, as when the workspace changes.
+    /// Forget every tab's results, as when the workspace changes.
     pub(super) fn reset_search(&mut self, cx: &mut Context<Self>) {
-        self.search_cancel.store(true, Ordering::Relaxed);
-        self.search_task = None;
-        self.searching = false;
-        self.facet_filter = FacetFilter::default();
-        self.set_results(None, cx);
+        for tab in &mut self.tabs {
+            tab.cancel();
+            tab.searching = false;
+            tab.facet_filter = FacetFilter::default();
+            tab.set_results(None);
+            tab.stale = true;
+        }
+        cx.notify();
     }
 
-    fn on_input_event(
+    pub(super) fn on_input_event(
         &mut self,
-        _: &Entity<InputState>,
+        input: &Entity<InputState>,
         event: &InputEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let tab = self.tab();
+        if &tab.search_input != input && &tab.path_input != input {
+            return;
+        }
         match event {
-            InputEvent::Change => self.schedule_search(true, cx),
-            InputEvent::PressEnter { .. } => self.schedule_search(false, cx),
+            InputEvent::Change => self.run_search(true, cx),
+            InputEvent::PressEnter { .. } => self.run_search(false, cx),
             InputEvent::Focus | InputEvent::Blur => {}
         }
     }
@@ -186,58 +169,71 @@ impl SearchApp {
     pub(super) fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         if page == Page::Search {
-            self.search_input
+            self.tab()
+                .search_input
                 .update(cx, |input, cx| input.focus(window, cx));
         }
         cx.notify();
     }
 
-    // ----- searching --------------------------------------------------------
-
-    fn current_query(&self, cx: &App) -> SearchQuery {
-        SearchQuery {
-            pattern: self.search_input.read(cx).value().to_string(),
-            case_sensitive: self.case_sensitive,
-            whole_word: self.whole_word,
-            regex: self.regex,
-            path_filter: self.path_input.read(cx).value().trim().to_string(),
-        }
+    /// Show the search page with the current tab's search box focused.
+    pub(super) fn show_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_page(Page::Search, window, cx);
     }
 
-    /// Search the repositories in scope for the current query, replacing any
-    /// search in flight.
-    pub(super) fn schedule_search(&mut self, debounce: bool, cx: &mut Context<Self>) {
-        self.search_cancel.store(true, Ordering::Relaxed);
-        self.search_task = None;
+    // ----- searching --------------------------------------------------------
 
-        let query = self.current_query(cx);
+    /// What is searched changed (repositories, their indexes or the scope):
+    /// search again in the current tab, and in the others once shown.
+    pub(super) fn schedule_search(&mut self, debounce: bool, cx: &mut Context<Self>) {
+        let active = self.active_tab;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            if index != active {
+                tab.cancel();
+                tab.stale = true;
+            }
+        }
+        self.run_search(debounce, cx);
+    }
+
+    /// Search the repositories in scope for the current tab's query,
+    /// replacing any search in flight.
+    pub(super) fn run_search(&mut self, debounce: bool, cx: &mut Context<Self>) {
+        let (sources, waiting) = self.search_sources(cx);
+        let query = self.tab().query(cx);
+        let tab = self.tab_mut();
+        tab.cancel();
+        tab.stale = false;
+
         if query.is_empty() {
-            self.query_error = None;
-            self.searching = false;
-            self.set_results(None, cx);
+            tab.query_error = None;
+            tab.searching = false;
+            tab.set_results(None);
+            Windows::save(cx);
+            cx.notify();
             return;
         }
         let compiled = match CompiledQuery::new(&query) {
             Ok(compiled) => compiled,
             Err(error) => {
-                self.query_error = Some(error);
-                self.searching = false;
+                tab.query_error = Some(error);
+                tab.searching = false;
                 cx.notify();
                 return;
             }
         };
-        self.query_error = None;
-        let (sources, waiting) = self.search_sources(cx);
+        tab.query_error = None;
         // Repositories still loading trigger another search when they finish.
-        self.searching = true;
+        tab.searching = true;
         if sources.is_empty() && waiting {
             cx.notify();
             return;
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
-        self.search_cancel = cancel.clone();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
+        tab.search_cancel = cancel.clone();
+        let tab_id = tab.id;
+        tab.search_task = Some(cx.spawn(async move |this, cx| {
             if debounce {
                 cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             }
@@ -250,39 +246,16 @@ impl SearchApp {
                 return;
             }
             this.update(cx, |this, cx| {
-                this.searching = waiting;
-                this.set_results(Some(outcome), cx);
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    tab.searching = waiting;
+                    tab.set_results(Some(outcome));
+                }
+                // Each tab's query is part of the session.
+                Windows::save(cx);
+                cx.notify();
             })
             .ok();
         }));
-        cx.notify();
-    }
-
-    fn set_results(&mut self, outcome: Option<SearchOutcome>, cx: &mut Context<Self>) {
-        self.expanded.clear();
-        self.results = outcome.map(|outcome| Results {
-            outcome: Arc::new(outcome),
-            facets: Facets::default(),
-            visible: Vec::new(),
-            syntax: HashMap::new(),
-        });
-        self.refresh_visible(cx);
-    }
-
-    /// Re-apply the facet filters and reset the list to the top.
-    fn refresh_visible(&mut self, cx: &mut Context<Self>) {
-        let count = match self.results.as_mut() {
-            Some(results) => {
-                let files = &results.outcome.files;
-                results.facets = Facets::new(files, &self.facet_filter);
-                results.visible = (0..files.len())
-                    .filter(|&index| self.facet_filter.matches(&files[index]))
-                    .collect();
-                results.visible.len()
-            }
-            None => 0,
-        };
-        self.list_state.reset(count);
         cx.notify();
     }
 
@@ -293,7 +266,7 @@ impl SearchApp {
         visible_index: usize,
         cx: &App,
     ) -> Option<Rc<SnippetSyntax>> {
-        let results = self.results.as_mut()?;
+        let results = self.tabs[self.active_tab].results.as_mut()?;
         let index = *results.visible.get(visible_index)?;
         if let Some(syntax) = results.syntax.get(&index) {
             return Some(syntax.clone());
@@ -316,20 +289,26 @@ impl SearchApp {
 
     /// Syntax colours follow the theme.
     fn theme_changed(&mut self, cx: &mut Context<Self>) {
-        if let Some(results) = self.results.as_mut() {
-            results.syntax.clear();
+        for tab in &mut self.tabs {
+            if let Some(results) = tab.results.as_mut() {
+                results.syntax.clear();
+            }
         }
         cx.notify();
     }
 
     pub(super) fn toggle_facet(&mut self, kind: FacetKind, value: String, cx: &mut Context<Self>) {
-        self.facet_filter.toggle(kind, value);
-        self.refresh_visible(cx);
+        let tab = self.tab_mut();
+        tab.facet_filter.toggle(kind, value);
+        tab.refresh_visible();
+        cx.notify();
     }
 
     pub(super) fn clear_facet(&mut self, kind: &FacetKind, cx: &mut Context<Self>) {
-        self.facet_filter.clear(kind);
-        self.refresh_visible(cx);
+        let tab = self.tab_mut();
+        tab.facet_filter.clear(kind);
+        tab.refresh_visible();
+        cx.notify();
     }
 
     pub(super) fn toggle_expanded(
@@ -338,27 +317,28 @@ impl SearchApp {
         key: String,
         cx: &mut Context<Self>,
     ) {
-        if !self.expanded.remove(&key) {
-            self.expanded.insert(key);
+        let tab = self.tab_mut();
+        if !tab.expanded.remove(&key) {
+            tab.expanded.insert(key);
         }
         // The card changed height; have the list measure it again.
-        self.list_state.splice(visible_index..visible_index + 1, 1);
+        tab.list_state.splice(visible_index..visible_index + 1, 1);
         cx.notify();
     }
 
     pub(super) fn set_case_sensitive(&mut self, value: bool, cx: &mut Context<Self>) {
-        self.case_sensitive = value;
-        self.schedule_search(false, cx);
+        self.tab_mut().case_sensitive = value;
+        self.run_search(false, cx);
     }
 
     pub(super) fn set_whole_word(&mut self, value: bool, cx: &mut Context<Self>) {
-        self.whole_word = value;
-        self.schedule_search(false, cx);
+        self.tab_mut().whole_word = value;
+        self.run_search(false, cx);
     }
 
     pub(super) fn set_regex(&mut self, value: bool, cx: &mut Context<Self>) {
-        self.regex = value;
-        self.schedule_search(false, cx);
+        self.tab_mut().regex = value;
+        self.run_search(false, cx);
     }
 
     // ----- opening hits -----------------------------------------------------
@@ -429,7 +409,7 @@ impl SearchApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_page(Page::Search, window, cx);
+        self.show_search(window, cx);
     }
 
     pub(super) fn on_focus_path_filter(
@@ -439,7 +419,8 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) {
         self.page = Page::Search;
-        self.path_input
+        self.tab()
+            .path_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
@@ -450,7 +431,7 @@ impl SearchApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_case_sensitive(!self.case_sensitive, cx);
+        self.set_case_sensitive(!self.tab().case_sensitive, cx);
     }
 
     pub(super) fn on_toggle_whole_word(
@@ -459,7 +440,7 @@ impl SearchApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_whole_word(!self.whole_word, cx);
+        self.set_whole_word(!self.tab().whole_word, cx);
     }
 
     pub(super) fn on_toggle_regex(
@@ -468,7 +449,33 @@ impl SearchApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_regex(!self.regex, cx);
+        self.set_regex(!self.tab().regex, cx);
+    }
+
+    pub(super) fn on_new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab(window, cx);
+    }
+
+    pub(super) fn on_close_tab(
+        &mut self,
+        _: &CloseTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tab(self.active_tab, window, cx);
+    }
+
+    pub(super) fn on_next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_tab(true, window, cx);
+    }
+
+    pub(super) fn on_previous_tab(
+        &mut self,
+        _: &PreviousTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_tab(false, window, cx);
     }
 
     pub(super) fn on_rebuild_index(
@@ -522,6 +529,6 @@ impl SearchApp {
     }
 }
 
-fn full_path(root: &Path, path: &str) -> PathBuf {
+pub(super) fn full_path(root: &Path, path: &str) -> PathBuf {
     root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR))
 }

@@ -19,7 +19,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::CONTEXT;
-use super::app::{Page, SearchApp, file_key};
+use super::app::{Page, SearchApp};
+use super::tabs::file_key;
 use super::highlight::LineStyles;
 use super::hub::{IndexActivity, RepoView};
 use super::windows::Windows;
@@ -44,6 +45,7 @@ impl Render for SearchApp {
             Page::Search => v_flex()
                 .flex_1()
                 .min_h_0()
+                .child(self.render_tab_strip(cx))
                 .child(self.render_scope_bar(cx))
                 .child(
                     h_flex()
@@ -71,6 +73,10 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_new_workspace))
             .on_action(cx.listener(Self::on_open_workspace))
             .on_action(cx.listener(Self::on_save_workspace_as))
+            .on_action(cx.listener(Self::on_new_tab))
+            .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(Self::on_next_tab))
+            .on_action(cx.listener(Self::on_previous_tab))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths.paths(), window, cx)
             }))
@@ -97,10 +103,10 @@ impl SearchApp {
                     "case-sensitive",
                     IconName::CaseSensitive,
                     "Match case (Alt+C)",
-                    self.case_sensitive,
+                    self.tab().case_sensitive,
                 )
                 .on_click(
-                    cx.listener(|this, _, _, cx| this.set_case_sensitive(!this.case_sensitive, cx)),
+                    cx.listener(|this, _, _, cx| this.set_case_sensitive(!this.tab().case_sensitive, cx)),
                 ),
             )
             .child(
@@ -108,18 +114,18 @@ impl SearchApp {
                     "whole-word",
                     Lucide::WholeWord,
                     "Match whole word (Alt+W)",
-                    self.whole_word,
+                    self.tab().whole_word,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.set_whole_word(!this.whole_word, cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.set_whole_word(!this.tab().whole_word, cx))),
             )
             .child(
                 option_toggle(
                     "regex",
                     Lucide::Regex,
                     "Use regular expression (Alt+R)",
-                    self.regex,
+                    self.tab().regex,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.set_regex(!this.regex, cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.set_regex(!this.tab().regex, cx))),
             );
 
         let on_repositories = self.page == Page::Repositories;
@@ -168,7 +174,7 @@ impl SearchApp {
             .child(self.render_workspace_menu(cx))
             .child(
                 div().flex_1().max_w(px(960.)).child(
-                    Input::new(&self.search_input)
+                    Input::new(&self.tab().search_input)
                         .prefix(Icon::new(IconName::Search).small().text_color(muted))
                         .suffix(toggles)
                         .cleanable(true)
@@ -177,7 +183,7 @@ impl SearchApp {
             )
             .child(
                 div().w(px(300.)).flex_none().child(
-                    Input::new(&self.path_input)
+                    Input::new(&self.tab().path_input)
                         .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
                         .cleanable(true)
                         .disabled(!searchable),
@@ -278,6 +284,101 @@ impl SearchApp {
                 }
                 menu
             })
+    }
+
+    // ----- tabs -----------------------------------------------------------------
+
+    /// One tab per open search, each labelled with its query and how much it
+    /// found, and a button for another.
+    fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, border, hover) = (theme.muted_foreground, theme.border, theme.list_hover);
+        let (active_bg, active_fg, bar_bg) = (theme.background, theme.foreground, theme.tab_bar);
+        let closable = self.tabs.len() > 1;
+
+        let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
+            let active = index == self.active_tab;
+            let count = tab
+                .results
+                .as_ref()
+                .map(|results| format::count(results.outcome.matched_lines));
+            h_flex()
+                .id(("search-tab", tab.id))
+                .flex_none()
+                .max_w(px(260.))
+                .gap_1p5()
+                .pl_3()
+                .pr_1()
+                .h(px(30.))
+                .border_1()
+                .border_b_0()
+                .rounded_t(theme.radius)
+                .text_sm()
+                .cursor_pointer()
+                .when(active, |tab| {
+                    tab.bg(active_bg)
+                        .border_color(border)
+                        .text_color(active_fg)
+                        // Cover the strip's bottom border, joining the page below.
+                        .mb(px(-1.))
+                })
+                .when(!active, |tab| {
+                    tab.border_color(gpui_kit::transparent_black())
+                        .text_color(muted)
+                        .hover(move |style| style.bg(hover))
+                })
+                .child(Icon::new(IconName::Search).xsmall())
+                .child(div().min_w_0().truncate().child(tab.label(cx)))
+                .when(tab.searching, |row| row.child(Spinner::new().xsmall()))
+                .when_some(count.filter(|_| !tab.searching), |row, count| {
+                    row.child(div().flex_none().text_xs().text_color(muted).child(count))
+                })
+                .child(
+                    div().flex_none().w(px(20.)).when(closable, |slot| {
+                        slot.child(
+                            Button::new(("close-tab", tab.id))
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::new(IconName::Close).xsmall())
+                                .tooltip("Close tab (Ctrl+W)")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_tab(index, window, cx)
+                                })),
+                        )
+                    }),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_tab(index, window, cx)
+                }))
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, window, cx| this.close_tab(index, window, cx)),
+                )
+        });
+
+        h_flex()
+            .id("search-tabs")
+            .flex_none()
+            .items_end()
+            .gap_0p5()
+            .px_2()
+            .pt_1p5()
+            .border_b_1()
+            .border_color(border)
+            .bg(bar_bg)
+            .overflow_x_scroll()
+            .children(tabs)
+            .child(
+                div().pb_1().pl_1().child(
+                    Button::new("new-tab")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Plus)
+                        .tooltip("New search tab (Ctrl+T)")
+                        .on_click(cx.listener(|this, _, window, cx| this.open_tab(window, cx))),
+                ),
+            )
     }
 
     // ----- scope bar ------------------------------------------------------------
@@ -459,7 +560,7 @@ impl SearchApp {
             .bg(theme.sidebar)
             .text_color(theme.sidebar_foreground);
 
-        let Some(results) = self.results.as_ref() else {
+        let Some(results) = self.tab().results.as_ref() else {
             return sidebar
                 .child(
                     div()
@@ -489,7 +590,7 @@ impl SearchApp {
         let (hover, active, muted) = (theme.list_hover, theme.accent, theme.muted_foreground);
         let (active_foreground, link) = (theme.accent_foreground, theme.primary);
         let radius = theme.radius;
-        let selected = self.facet_filter.get(kind);
+        let selected = self.tab().facet_filter.get(kind);
         let title = kind.title();
 
         let rows = entries.iter().take(FACET_ROWS).map(|(value, count)| {
@@ -582,11 +683,11 @@ impl SearchApp {
             .py_2()
             .text_sm()
             .text_color(muted)
-            .when(self.searching, |row| row.child(Spinner::new().small()))
+            .when(self.tab().searching, |row| row.child(Spinner::new().small()))
             .child(self.summary_text());
 
         let repos = self.repo_views(cx);
-        let content = if let Some(error) = self.query_error.clone() {
+        let content = if let Some(error) = self.tab().query_error.clone() {
             centered_message(
                 cx,
                 Icon::new(IconName::TriangleAlert).text_color(theme.danger),
@@ -605,13 +706,14 @@ impl SearchApp {
                 ),
             )
             .into_any_element()
-        } else if self.results.is_none() {
-            if self.searching {
+        } else if self.tab().results.is_none() {
+            if self.tab().searching {
                 div().into_any_element()
             } else {
                 self.render_tips(cx).into_any_element()
             }
         } else if self
+            .tab()
             .results
             .as_ref()
             .is_some_and(|results| results.visible.is_empty())
@@ -620,7 +722,7 @@ impl SearchApp {
                 cx,
                 Icon::new(IconName::Search).text_color(muted),
                 "No results",
-                if !self.facet_filter.is_empty() {
+                if !self.tab().facet_filter.is_empty() {
                     "Nothing matches with the current filters. Try clearing them.".to_string()
                 } else {
                     "Try a shorter query, turn off whole word or case matching, widen the path filter, or widen the scope."
@@ -637,12 +739,12 @@ impl SearchApp {
                 .size_full()
                 .child(
                     list(
-                        self.list_state.clone(),
+                        self.tab().list_state.clone(),
                         cx.processor(|this, index, _window, cx| this.render_file(index, cx)),
                     )
                     .size_full(),
                 )
-                .vertical_scrollbar(&self.list_state)
+                .vertical_scrollbar(&self.tab().list_state)
                 .into_any_element()
         };
 
@@ -655,8 +757,8 @@ impl SearchApp {
     }
 
     fn summary_text(&self) -> String {
-        let Some(results) = self.results.as_ref() else {
-            return if self.searching {
+        let Some(results) = self.tab().results.as_ref() else {
+            return if self.tab().searching {
                 "Searching…".into()
             } else {
                 String::new()
@@ -701,7 +803,7 @@ impl SearchApp {
                 format::plural(outcome.unindexed_repos, "repository", "repositories")
             ));
         }
-        if self.searching {
+        if self.tab().searching {
             parts.push("some repositories are still loading".into());
         }
         if outcome.truncated {
@@ -711,7 +813,7 @@ impl SearchApp {
     }
 
     fn render_file(&mut self, visible_index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some((file, multi_repo)) = self.results.as_ref().and_then(|results| {
+        let Some((file, multi_repo)) = self.tab().results.as_ref().and_then(|results| {
             Some((
                 results.file(visible_index)?.clone(),
                 results.outcome.repos > 1,
@@ -720,7 +822,7 @@ impl SearchApp {
             return div().into_any_element();
         };
         let key = file_key(&file);
-        let expanded = self.expanded.contains(&key);
+        let expanded = self.tab().expanded.contains(&key);
         let theme = cx.theme();
         let (border, muted, header_bg) = (theme.border, theme.muted_foreground, theme.secondary);
         let (radius, chip_bg) = (theme.radius, theme.background);
@@ -975,6 +1077,7 @@ impl SearchApp {
                     .child(tip("src  *.rs", "Path filter keeps matching paths"))
                     .child(tip("!tests  -*.md", "Path filter drops matching paths"))
                     .child(tip("Narrow by tag", "Pick which repositories to search"))
+                    .child(tip("Ctrl+T  Ctrl+Tab", "New search tab, next tab"))
                     .child(tip("Click a line", "Open it in your editor")),
             )
     }

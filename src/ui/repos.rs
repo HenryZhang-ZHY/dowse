@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -230,10 +229,16 @@ impl SearchApp {
     ) {
         match event {
             HubEvent::ReleaseCorpus(id) => {
-                // A queued search runs again once the new index loads.
+                // A queued search runs again once the new index loads; tabs
+                // in the background search again when shown.
                 if self.is_searched(id, cx) {
-                    self.search_cancel.store(true, Ordering::Relaxed);
-                    self.search_task = None;
+                    let active = self.active_tab;
+                    for (index, tab) in self.tabs.iter_mut().enumerate() {
+                        if tab.search_task.is_some() {
+                            tab.cancel();
+                            tab.stale |= index != active;
+                        }
+                    }
                 }
             }
             HubEvent::CorpusChanged(id) => {
