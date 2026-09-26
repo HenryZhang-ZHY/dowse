@@ -13,16 +13,16 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-    StyledExt as _, h_flex, v_flex,
+    StyledExt as _, h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::CONTEXT;
 use super::app::{Page, SearchApp};
-use super::tabs::file_key;
 use super::highlight::LineStyles;
 use super::hub::{IndexActivity, RepoView};
+use super::tabs::file_key;
 use super::windows::Windows;
 use crate::format;
 use tgrep_gpui::engine::facets::FacetKind;
@@ -36,6 +36,8 @@ const COLLAPSED_MATCH_LINES: usize = 6;
 const FACET_ROWS: usize = 30;
 const SIDEBAR_WIDTH: f32 = 240.;
 const LINE_NUMBER_WIDTH: f32 = 60.;
+/// The preview pane's starting width.
+const PREVIEW_WIDTH: f32 = 720.;
 
 impl Render for SearchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -53,7 +55,7 @@ impl Render for SearchApp {
                         .min_h_0()
                         .items_start()
                         .child(self.render_sidebar(cx))
-                        .child(self.render_results(window, cx)),
+                        .child(self.render_results_and_preview(window, cx)),
                 )
                 .into_any_element(),
         };
@@ -77,6 +79,9 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))
+            .on_action(cx.listener(Self::on_close_preview))
+            .on_action(cx.listener(Self::on_next_match))
+            .on_action(cx.listener(Self::on_previous_match))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths.paths(), window, cx)
             }))
@@ -105,9 +110,9 @@ impl SearchApp {
                     "Match case (Alt+C)",
                     self.tab().case_sensitive,
                 )
-                .on_click(
-                    cx.listener(|this, _, _, cx| this.set_case_sensitive(!this.tab().case_sensitive, cx)),
-                ),
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_case_sensitive(!this.tab().case_sensitive, cx)
+                })),
             )
             .child(
                 option_toggle(
@@ -116,7 +121,9 @@ impl SearchApp {
                     "Match whole word (Alt+W)",
                     self.tab().whole_word,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.set_whole_word(!this.tab().whole_word, cx))),
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.set_whole_word(!this.tab().whole_word, cx)),
+                ),
             )
             .child(
                 option_toggle(
@@ -333,24 +340,22 @@ impl SearchApp {
                 .when_some(count.filter(|_| !tab.searching), |row, count| {
                     row.child(div().flex_none().text_xs().text_color(muted).child(count))
                 })
-                .child(
-                    div().flex_none().w(px(20.)).when(closable, |slot| {
-                        slot.child(
-                            Button::new(("close-tab", tab.id))
-                                .ghost()
-                                .xsmall()
-                                .icon(Icon::new(IconName::Close).xsmall())
-                                .tooltip("Close tab (Ctrl+W)")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.close_tab(index, window, cx)
-                                })),
-                        )
-                    }),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.activate_tab(index, window, cx)
+                .child(div().flex_none().w(px(20.)).when(closable, |slot| {
+                    slot.child(
+                        Button::new(("close-tab", tab.id))
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Close).xsmall())
+                            .tooltip("Close tab (Ctrl+W)")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_tab(index, window, cx)
+                            })),
+                    )
                 }))
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.activate_tab(index, window, cx)),
+                )
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |this, _, window, cx| this.close_tab(index, window, cx)),
@@ -671,6 +676,38 @@ impl SearchApp {
 
     // ----- results ------------------------------------------------------------
 
+    /// The results, and beside them the file being previewed, if any, with a
+    /// divider to resize them.
+    fn render_results_and_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let results = self.render_results(window, cx).into_any_element();
+        match self.render_preview(cx) {
+            Some(preview) => div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(
+                    h_resizable("results-preview")
+                        .child(
+                            resizable_panel()
+                                .size_range(px(320.)..Pixels::MAX)
+                                .child(results),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(PREVIEW_WIDTH))
+                                .size_range(px(360.)..Pixels::MAX)
+                                .child(preview),
+                        ),
+                )
+                .into_any_element(),
+            None => results,
+        }
+    }
+
     fn render_results(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = window;
         let theme = cx.theme();
@@ -683,7 +720,9 @@ impl SearchApp {
             .py_2()
             .text_sm()
             .text_color(muted)
-            .when(self.tab().searching, |row| row.child(Spinner::new().small()))
+            .when(self.tab().searching, |row| {
+                row.child(Spinner::new().small())
+            })
             .child(self.summary_text());
 
         let repos = self.repo_views(cx);
@@ -836,9 +875,16 @@ impl SearchApp {
         };
         let first_line = file.first_match_line().unwrap_or(1);
         let root: PathBuf = file.repo.root.clone();
+        let previewed_line = self
+            .tab()
+            .preview
+            .as_ref()
+            .filter(|preview| preview.shows_file(&file))
+            .map(|preview| preview.line);
 
         let header = {
-            let (open_root, open_path) = (root.clone(), file.path.clone());
+            let (open_repo, open_path, language) =
+                (file.repo.clone(), file.path.clone(), file.language);
             let (reveal_root, reveal_path) = (root.clone(), file.path.clone());
             let copy_path = full_display_path(&root, &file.path);
             h_flex()
@@ -882,8 +928,13 @@ impl SearchApp {
                         .hover(|style| style.underline())
                         .child(div().flex_none().text_color(muted).child(directory))
                         .child(div().flex_none().font_semibold().child(name))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_hit(&open_root, &open_path, first_line, window, cx)
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.modifiers().secondary() {
+                                this.open_hit(&open_repo.root, &open_path, first_line, window, cx)
+                            } else {
+                                let repo = open_repo.clone();
+                                this.preview_hit(repo, open_path.clone(), language, first_line, cx)
+                            }
                         })),
                 )
                 .when_some(file.language, |row, language| {
@@ -937,7 +988,8 @@ impl SearchApp {
             let snippet_syntax = syntax.as_ref().and_then(|syntax| syntax.get(index));
             for (line_index, line) in snippet.lines.iter().enumerate() {
                 let line_syntax = snippet_syntax.and_then(|styles| styles.get(line_index));
-                body = body.child(self.render_line(&file, &key, line, line_syntax, cx));
+                let previewed = previewed_line == Some(line.number);
+                body = body.child(self.render_line(&file, &key, line, line_syntax, previewed, cx));
             }
         }
 
@@ -1001,18 +1053,23 @@ impl SearchApp {
         key: &str,
         line: &SnippetLine,
         syntax: Option<&LineStyles>,
+        previewed: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
         let styled = code_text(&line.text, syntax, &line.highlights, cx);
         let (hover, muted) = (theme.list_hover, theme.muted_foreground);
+        let previewed_bg = theme
+            .yellow
+            .opacity(if theme.is_dark() { 0.16 } else { 0.18 });
         let number = line.number;
-        let (root, path) = (file.repo.root.clone(), file.path.clone());
+        let (repo, path, language) = (file.repo.clone(), file.path.clone(), file.language);
 
         h_flex()
             .id(SharedString::from(format!("line:{key}:{number}")))
             .cursor_pointer()
-            .hover(move |style| style.bg(hover))
+            .when(previewed, |row| row.bg(previewed_bg))
+            .when(!previewed, |row| row.hover(move |style| style.bg(hover)))
             .child(
                 div()
                     .flex_none()
@@ -1032,8 +1089,12 @@ impl SearchApp {
                     .when(!line.is_match, |text| text.text_color(muted).opacity(0.8))
                     .child(styled),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_hit(&root, &path, number, window, cx)
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.modifiers().secondary() {
+                    this.open_hit(&repo.root, &path, number, window, cx)
+                } else {
+                    this.preview_hit(repo.clone(), path.clone(), language, number, cx)
+                }
             }))
     }
 
@@ -1078,7 +1139,9 @@ impl SearchApp {
                     .child(tip("!tests  -*.md", "Path filter drops matching paths"))
                     .child(tip("Narrow by tag", "Pick which repositories to search"))
                     .child(tip("Ctrl+T  Ctrl+Tab", "New search tab, next tab"))
-                    .child(tip("Click a line", "Open it in your editor")),
+                    .child(tip("Click a line", "Preview the file there"))
+                    .child(tip("F4  Shift+F4", "Next and previous match"))
+                    .child(tip("Ctrl+Click", "Open in your editor directly")),
             )
     }
 

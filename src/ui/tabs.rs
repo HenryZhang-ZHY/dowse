@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::input::InputState;
 use gpui_kit::*;
+use regex::Regex;
 
 use super::app::{SearchApp, SnippetSyntax};
+use super::preview::Preview;
 use super::windows::Windows;
 use tgrep_gpui::engine::facets::{FacetFilter, Facets};
 use tgrep_gpui::engine::query::SearchQuery;
@@ -40,12 +42,16 @@ pub(super) struct SearchTab {
     /// What is searched changed while the tab was in the background, so it
     /// searches again when shown.
     pub(super) stale: bool,
+    /// The result file shown beside the results.
+    pub(super) preview: Option<Preview>,
     _subscriptions: Vec<Subscription>,
 }
 
 /// A finished search and the facet view over it.
 pub(super) struct Results {
     pub(super) outcome: Arc<SearchOutcome>,
+    /// The line matcher that found them, which the preview marks matches with.
+    pub(super) matcher: Regex,
     pub(super) facets: Facets,
     /// Indexes into `outcome.files` that pass the facet filters.
     pub(super) visible: Vec<usize>,
@@ -97,10 +103,11 @@ impl SearchTab {
         self.search_task = None;
     }
 
-    pub(super) fn set_results(&mut self, outcome: Option<SearchOutcome>) {
+    pub(super) fn set_results(&mut self, outcome: Option<(SearchOutcome, Regex)>) {
         self.expanded.clear();
-        self.results = outcome.map(|outcome| Results {
+        self.results = outcome.map(|(outcome, matcher)| Results {
             outcome: Arc::new(outcome),
+            matcher,
             facets: Facets::default(),
             visible: Vec::new(),
             syntax: HashMap::new(),
@@ -172,6 +179,7 @@ impl SearchApp {
             search_task: None,
             search_cancel: Arc::new(AtomicBool::new(false)),
             stale: true,
+            preview: None,
             _subscriptions: subscriptions,
         }
     }
@@ -211,7 +219,12 @@ impl SearchApp {
         self.activate_tab(active, window, cx);
     }
 
-    pub(super) fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn activate_tab(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if index >= self.tabs.len() {
             return;
         }

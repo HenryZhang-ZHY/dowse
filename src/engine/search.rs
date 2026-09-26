@@ -358,7 +358,7 @@ const ELLIPSIS: &str = "…";
 
 /// Expand tabs and clip long lines around the first highlight, carrying the
 /// highlight ranges along.
-fn display_line(
+pub(super) fn display_line(
     line: &str,
     ranges: &[Range<usize>],
     max_len: usize,

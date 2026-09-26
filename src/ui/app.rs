@@ -143,6 +143,7 @@ impl SearchApp {
             tab.searching = false;
             tab.facet_filter = FacetFilter::default();
             tab.set_results(None);
+            tab.preview = None;
             tab.stale = true;
         }
         cx.notify();
@@ -209,6 +210,7 @@ impl SearchApp {
             tab.query_error = None;
             tab.searching = false;
             tab.set_results(None);
+            tab.preview = None;
             Windows::save(cx);
             cx.notify();
             return;
@@ -233,6 +235,7 @@ impl SearchApp {
         let cancel = Arc::new(AtomicBool::new(false));
         tab.search_cancel = cancel.clone();
         let tab_id = tab.id;
+        let matcher = compiled.matcher.clone();
         tab.search_task = Some(cx.spawn(async move |this, cx| {
             if debounce {
                 cx.background_executor().timer(SEARCH_DEBOUNCE).await;
@@ -246,9 +249,14 @@ impl SearchApp {
                 return;
             }
             this.update(cx, |this, cx| {
-                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
+                    let tab = &mut this.tabs[index];
                     tab.searching = waiting;
-                    tab.set_results(Some(outcome));
+                    tab.set_results(Some((outcome, matcher)));
+                    // Mark the new query's matches in the file being previewed.
+                    if tab.preview.is_some() {
+                        this.load_preview(index, false, cx);
+                    }
                 }
                 // Each tab's query is part of the session.
                 Windows::save(cx);
@@ -278,7 +286,11 @@ impl SearchApp {
             .snippets
             .iter()
             .map(|snippet| {
-                let lines: Vec<&str> = snippet.lines.iter().map(|line| line.text.as_str()).collect();
+                let lines: Vec<&str> = snippet
+                    .lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect();
                 self.highlighters.highlight(grammar, &lines, theme)
             })
             .collect();
@@ -289,9 +301,12 @@ impl SearchApp {
 
     /// Syntax colours follow the theme.
     fn theme_changed(&mut self, cx: &mut Context<Self>) {
-        for tab in &mut self.tabs {
-            if let Some(results) = tab.results.as_mut() {
+        for index in 0..self.tabs.len() {
+            if let Some(results) = self.tabs[index].results.as_mut() {
                 results.syntax.clear();
+            }
+            if self.tabs[index].preview.is_some() {
+                self.load_preview(index, false, cx);
             }
         }
         cx.notify();

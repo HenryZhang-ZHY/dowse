@@ -102,10 +102,7 @@ fn highlight_lines(
 }
 
 /// Cut styles over the joined text into per-line styles.
-fn split_by_line(
-    lines: &[&str],
-    styles: Vec<(Range<usize>, HighlightStyle)>,
-) -> Vec<LineStyles> {
+fn split_by_line(lines: &[&str], styles: Vec<(Range<usize>, HighlightStyle)>) -> Vec<LineStyles> {
     let mut result = Vec::with_capacity(lines.len());
     let mut styles = styles
         .into_iter()
@@ -155,7 +152,11 @@ mod tests {
         let split = split_by_line(&lines, vec![(1..7, bold())]);
         assert_eq!(
             split,
-            vec![vec![(1..2, bold())], vec![(0..2, bold())], vec![(0..1, bold())]]
+            vec![
+                vec![(1..2, bold())],
+                vec![(0..2, bold())],
+                vec![(0..1, bold())]
+            ]
         );
     }
 

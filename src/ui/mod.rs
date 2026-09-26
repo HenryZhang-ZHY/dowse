@@ -5,6 +5,7 @@
 mod app;
 mod highlight;
 mod hub;
+mod preview;
 mod render;
 mod repos;
 mod repos_page;
@@ -42,6 +43,9 @@ actions!(
         CloseTab,
         NextTab,
         PreviousTab,
+        ClosePreview,
+        NextMatch,
+        PreviousMatch,
         Quit,
     ]
 );
@@ -66,6 +70,9 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-pagedown", NextTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-pageup", PreviousTab, Some(CONTEXT)),
+        KeyBinding::new("escape", ClosePreview, Some(CONTEXT)),
+        KeyBinding::new("f4", NextMatch, Some(CONTEXT)),
+        KeyBinding::new("shift-f4", PreviousMatch, Some(CONTEXT)),
     ]);
     // VS Code's search toggles. On macOS plain alt-letter types a character.
     #[cfg(target_os = "macos")]

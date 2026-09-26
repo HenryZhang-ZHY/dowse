@@ -45,10 +45,16 @@ you develop in.
   `Ctrl+Shift+Tab` (or `Ctrl+PageDown/PageUp`) step through them, and a middle click
   closes one. Each tab has its own query, options, path filter and facet filters; the
   scope is the window's. Tabs come back with their window on the next start.
-- **Open in your editor**: click a line. VS Code, Cursor, Zed or Sublime Text is used
-  when found on `PATH`, otherwise the system default application. Set
-  `TGREP_GPUI_EDITOR` to choose, for example `code -g {file}:{line}` or
-  `nvim-qt +{line} {file}`.
+- **Preview in place**: click a line to see the whole file beside the results,
+  coloured by language, with the query's matches marked and the line in view; no
+  waiting for an editor to start. Drag the divider to resize it and `Esc` closes it.
+  `F4` and `Shift+F4` step through the matches, on into the next or previous file.
+  Each tab keeps its own preview. The preview is for reading; nothing is edited.
+- **Open in your editor** from the preview's "Open in Editor" button (at the chosen
+  line), by double-clicking a line there, or straight from the results with
+  `Ctrl+Click`. VS Code, Cursor, Zed or Sublime Text is used when found on `PATH`,
+  otherwise the system default application. Set `TGREP_GPUI_EDITOR` to choose, for
+  example `code -g {file}:{line}` or `nvim-qt +{line} {file}`.
 - **Shares indexes with the tgrep CLI**. Each repository's index lives in its
   `.tgrep` directory, the same place `tgrep index` and `tgrep serve` use. A repository
   without an index gets one in the background, one build at a time; until then its
@@ -100,8 +106,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `highlight.rs` colours code by language. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `highlight.rs` colours code by language. |
 | `src/cli.rs` | The command line. |
 | `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
 | `src/shell.rs` | Explorer integration on Windows. |
