@@ -33,8 +33,28 @@ you develop in.
 - **Facets narrow the results** without changing the scope: repository, branch, each
   tag group, language and top-level directory, each counted under the others'
   filters, as on grep.app.
-- **Search as you type** with toggles for match case (`Alt+C`), whole word (`Alt+W`)
-  and regular expression (`Alt+R`). On macOS the shortcuts are `Cmd+Alt+C/W/R`.
+- **GitHub code search syntax**, as you type. Terms combine per file, not per line:
+  `parse config` finds files containing both, wherever they are, and shows the lines
+  with either.
+
+  | Query | Finds files |
+  | --- | --- |
+  | `parse config` | containing both (`AND` between them is optional) |
+  | `parse OR config` | containing either; `AND` binds tighter than `OR` |
+  | `parse NOT config`, `NOT (a OR b)` | containing `parse` but not `config`; without `a` or `b` |
+  | `"fn main()"` | containing the exact text; `\"` and `\\` escape inside quotes |
+  | `/fn \w+_test/` | with a line matching the regular expression |
+  | `path:src/*.rs`, `path:engine` | whose path matches the glob (anchored when it holds a `/`) or contains the text |
+  | `language:rust`, `lang:ts` | in the language, by name, alias or extension |
+  | `repo:api`, `branch:main`, `tag:owner:alice` | from matching repositories |
+  | `-path:tests`, `-lang:md` | not matching the qualifier |
+
+  Qualifier values may be quoted (`language:"Visual Basic"`) or a `/regex/`, and
+  `content:` makes a plain term of text that looks like a qualifier. A query of only
+  qualifiers, such as `path:*.proto`, lists the files without reading them. Toggles
+  set match case (`Alt+C`) and whole word (`Alt+W`) for every term; regular
+  expression (`Alt+R`) takes the whole box as one regex, matched line by line. On
+  macOS the shortcuts are `Cmd+Alt+C/W/R`.
 - **Path filter**: space-separated terms. `src` keeps paths containing `src`, `*.rs`
   keeps matching globs, and `!tests` or `-*.md` drops paths.
 - **Results as snippets**, coloured by language with tree-sitter grammars: every match
@@ -106,7 +126,7 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
 | `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `highlight.rs` colours code by language. |
 | `src/cli.rs` | The command line. |
 | `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
@@ -116,12 +136,17 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 ## How a search runs
 
-1. The query becomes a regex (literal text is escaped; whole word adds `\b`) and a
-   tgrep trigram plan.
-2. For every repository in scope, the plan selects candidate files from its index.
-   Files the watcher saw change are added, and the path filter is applied.
+1. The query is parsed, and each term becomes a regex (literal text is escaped; whole
+   word adds `\b`) and a tgrep trigram plan. The terms outside any `NOT` also make up
+   one combined regex, which finds the lines to show.
+2. Repository qualifiers rule out whole repositories. For every other repository in
+   scope, the plans select candidate files from its index: terms that must all match
+   intersect their candidates, alternatives unite them, and a negated term narrows
+   nothing. Files the watcher saw change are added, then the path filter and the
+   path and language qualifiers drop files before they are read.
 3. Candidates are read and matched in ordered parallel chunks, repository by
-   repository. Once about 20,000 matching lines are found, the rest are skipped and
+   repository; each term is checked only when the answer still depends on it. Once
+   about 20,000 matching lines (or 10,000 files) are found, the rest are skipped and
    the summary says so.
 
 On a 42,000-file tree (1.3 GB of crate sources), the index builds in about 6 s and typical

@@ -150,7 +150,7 @@ impl SearchApp {
     ) -> SearchTab {
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search code…")
+                .placeholder("Search code…  e.g. parse config lang:rust -path:tests")
                 .default_value(query.pattern)
         });
         let path_input = cx.new(|cx| {

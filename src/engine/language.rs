@@ -11,6 +11,30 @@ pub fn detect(path: &str) -> Option<&'static str> {
     by_extension(extension)
 }
 
+/// Whether a file in `language` satisfies `language:<wanted>`: the name
+/// ignoring case (`rust`, `c#`, `"visual basic"`), a common alias
+/// (`csharp`, `golang`), or an extension of the language (`rs`, `py`, `md`).
+pub fn matches(language: Option<&str>, wanted: &str) -> bool {
+    let Some(language) = language else {
+        return false;
+    };
+    let wanted = wanted.to_ascii_lowercase();
+    let alias = match wanted.as_str() {
+        "csharp" => Some("C#"),
+        "fsharp" => Some("F#"),
+        "golang" => Some("Go"),
+        "c++" | "cplusplus" => Some("C++"),
+        "shell" | "bash" | "sh" => Some("Shell"),
+        "protobuf" => Some("Protocol Buffers"),
+        "terraform" => Some("HCL"),
+        "vb" | "vbnet" => Some("Visual Basic"),
+        _ => None,
+    };
+    language.eq_ignore_ascii_case(&wanted)
+        || alias == Some(language)
+        || by_extension(&wanted) == Some(language)
+}
+
 fn by_file_name(name: &str) -> Option<&'static str> {
     Some(match name {
         "makefile" | "gnumakefile" => "Makefile",
@@ -94,7 +118,7 @@ fn by_extension(extension: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::detect;
+    use super::{detect, matches};
 
     #[test]
     fn detects_by_extension_and_name() {
@@ -103,5 +127,18 @@ mod tests {
         assert_eq!(detect("build/Makefile"), Some("Makefile"));
         assert_eq!(detect("LICENSE"), None);
         assert_eq!(detect("archive.unknownext"), None);
+    }
+
+    #[test]
+    fn matches_names_aliases_and_extensions() {
+        assert!(matches(Some("Rust"), "rust"));
+        assert!(matches(Some("Rust"), "rs"));
+        assert!(matches(Some("C#"), "csharp"));
+        assert!(matches(Some("C#"), "C#"));
+        assert!(matches(Some("Visual Basic"), "visual basic"));
+        assert!(matches(Some("TypeScript"), "ts"));
+        assert!(!matches(Some("TSX"), "ts"));
+        assert!(!matches(Some("Rust"), "go"));
+        assert!(!matches(None, "rust"));
     }
 }

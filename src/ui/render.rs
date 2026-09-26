@@ -129,7 +129,7 @@ impl SearchApp {
                 option_toggle(
                     "regex",
                     Lucide::Regex,
-                    "Use regular expression (Alt+R)",
+                    "Whole query is one regular expression (Alt+R); use /…/ for a regex term",
                     self.tab().regex,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.set_regex(!this.tab().regex, cx))),
@@ -305,10 +305,15 @@ impl SearchApp {
 
         let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
             let active = index == self.active_tab;
-            let count = tab
-                .results
-                .as_ref()
-                .map(|results| format::count(results.outcome.matched_lines));
+            // Lines found, or files for a query of only qualifiers.
+            let count = tab.results.as_ref().map(|results| {
+                let outcome = &results.outcome;
+                format::count(if outcome.matched_lines > 0 {
+                    outcome.matched_lines
+                } else {
+                    outcome.files.len()
+                })
+            });
             h_flex()
                 .id(("search-tab", tab.id))
                 .flex_none()
@@ -804,11 +809,15 @@ impl SearchApp {
             };
         };
         let outcome = &results.outcome;
-        let mut parts = vec![format!(
-            "{} in {}",
-            format::plural(outcome.matched_lines, "result", "results"),
-            format::plural(outcome.files.len(), "file", "files"),
-        )];
+        let files = format::plural(outcome.files.len(), "file", "files");
+        let mut parts = vec![if outcome.matched_lines == 0 && !outcome.files.is_empty() {
+            files
+        } else {
+            format!(
+                "{} in {files}",
+                format::plural(outcome.matched_lines, "result", "results"),
+            )
+        }];
         if outcome.repos > 1 {
             let with_hits = {
                 let mut ids: Vec<&str> = outcome
@@ -946,13 +955,15 @@ impl SearchApp {
                             .child(language),
                     )
                 })
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format::plural(file.matched_lines, "match", "matches")),
-                )
+                .when(file.matched_lines > 0, |row| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format::plural(file.matched_lines, "match", "matches")),
+                    )
+                })
                 .child(
                     Button::new(SharedString::from(format!("copy:{key}")))
                         .ghost()
@@ -1041,7 +1052,8 @@ impl SearchApp {
                     .rounded(radius_lg)
                     .overflow_hidden()
                     .child(header)
-                    .child(body)
+                    // A file found by its qualifiers alone has no lines.
+                    .when(!file.snippets.is_empty(), |card| card.child(body))
                     .children(footer),
             )
             .into_any_element()
@@ -1109,7 +1121,7 @@ impl SearchApp {
                 .gap_3()
                 .child(
                     div()
-                        .w(px(150.))
+                        .w(px(190.))
                         .flex_none()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
@@ -1132,9 +1144,15 @@ impl SearchApp {
                 v_flex()
                     .gap_1p5()
                     .text_sm()
-                    .child(tip("Alt+C  Aa", "Match case"))
-                    .child(tip("Alt+W  ab", "Match whole word"))
-                    .child(tip("Alt+R  .*", "Regular expression"))
+                    .child(tip("parse config", "Files containing both, on any lines"))
+                    .child(tip("a OR b  NOT c", "Either term; files without c"))
+                    .child(tip("\"a b\"  /a\\d+/", "Exact phrase; regular expression"))
+                    .child(tip(
+                        "lang:rust  -path:test",
+                        "Qualifiers: path, lang, repo, branch, tag",
+                    ))
+                    .child(tip("Alt+C  Alt+W", "Match case, whole word"))
+                    .child(tip("Alt+R  .*", "Whole query as one regular expression"))
                     .child(tip("src  *.rs", "Path filter keeps matching paths"))
                     .child(tip("!tests  -*.md", "Path filter drops matching paths"))
                     .child(tip("Narrow by tag", "Pick which repositories to search"))

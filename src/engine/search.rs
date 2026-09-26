@@ -28,6 +28,8 @@ pub struct SearchLimits {
     pub max_lines_per_file: usize,
     /// Once about this many matching lines are found, remaining files are skipped.
     pub max_total_lines: usize,
+    /// The same for files, which a query of only qualifiers finds without lines.
+    pub max_files: usize,
     /// Longer lines are clipped around their first match.
     pub max_line_len: usize,
     /// Files above this size are skipped, like tgrep's default `--max-filesize`.
@@ -40,6 +42,7 @@ impl Default for SearchLimits {
             context_lines: 1,
             max_lines_per_file: 200,
             max_total_lines: 20_000,
+            max_files: 10_000,
             max_line_len: 400,
             max_file_size: tgrep_core::walker::DEFAULT_MAX_FILE_SIZE.unwrap_or(u64::MAX),
         }
@@ -71,11 +74,22 @@ pub struct FileMatch {
     pub path: String,
     pub language: Option<&'static str>,
     /// Every matching line in the file, including ones not kept in `snippets`.
+    /// Zero for a file that matched by its qualifiers alone, as with `path:*.rs`.
     pub matched_lines: usize,
     pub snippets: Vec<Snippet>,
 }
 
 impl FileMatch {
+    fn without_lines(repo: &Arc<RepoInfo>, path: &str) -> Self {
+        Self {
+            repo: repo.clone(),
+            path: path.to_string(),
+            language: language::detect(path),
+            matched_lines: 0,
+            snippets: Vec::new(),
+        }
+    }
+
     pub fn first_match_line(&self) -> Option<usize> {
         self.snippets
             .iter()
@@ -133,13 +147,19 @@ pub fn search(
     let started = Instant::now();
     let mut candidates: Vec<(usize, String)> = Vec::new();
     for (index, source) in sources.iter().enumerate() {
-        let mut paths = source.corpus.candidates(&query.plan);
+        if !query.may_match_repo(&source.repo) {
+            continue;
+        }
+        let mut paths = query.candidates(&source.corpus);
         if !source.changed.is_empty() {
             paths.extend(source.changed.iter().cloned());
             paths.sort();
             paths.dedup();
         }
-        paths.retain(|path| query.path_filter.matches(path));
+        paths.retain(|path| {
+            query.path_filter.matches(path)
+                && query.verdict(&source.repo, Some(path)) != Some(false)
+        });
         candidates.extend(paths.into_iter().map(|path| (index, path)));
     }
 
@@ -157,9 +177,7 @@ pub fn search(
                 if cancel.load(Ordering::Relaxed) {
                     return None;
                 }
-                let source = &sources[*index];
-                let text = read_text(&source.corpus.full_path(path), limits.max_file_size)?;
-                match_text(&source.repo, path, &text, &query.matcher, limits)
+                search_file(&sources[*index], path, query, limits)
             })
             .collect();
         total_lines += found.iter().map(|file| file.matched_lines).sum::<usize>();
@@ -167,7 +185,8 @@ pub fn search(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        if total_lines >= limits.max_total_lines && chunks.peek().is_some() {
+        let full = total_lines >= limits.max_total_lines || files.len() >= limits.max_files;
+        if full && chunks.peek().is_some() {
             truncated = true;
             break;
         }
@@ -190,6 +209,69 @@ pub fn search(
         cancelled: cancel.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
     }
+}
+
+/// Decide one candidate file, reading it only when its contents matter.
+fn search_file(
+    source: &SearchSource,
+    path: &str,
+    query: &CompiledQuery,
+    limits: &SearchLimits,
+) -> Option<FileMatch> {
+    let settled = query.verdict(&source.repo, Some(path));
+    let named = || FileMatch::without_lines(&source.repo, path);
+    if settled == Some(true) && !query.wants_lines() {
+        return Some(named());
+    }
+    let Some(text) = read_text(&source.corpus.full_path(path), limits.max_file_size) else {
+        // A binary or oversized file can still match by its qualifiers.
+        return (settled == Some(true)).then(named);
+    };
+    let found = if query.wants_lines() {
+        match_text(&source.repo, path, &text, &query.matcher, limits)
+    } else {
+        None
+    };
+    if settled == Some(true) {
+        return Some(found.unwrap_or_else(named));
+    }
+    let matches = query.matches_file(&source.repo, path, |index| {
+        let (regex, wanted) = query.term(index);
+        // The matcher unites the wanted terms: no line for it means none for
+        // them, and with just one term its lines are that term's.
+        if wanted && found.is_none() {
+            return false;
+        }
+        if wanted && query.wanted_terms() == 1 {
+            return true;
+        }
+        any_line_matches(&text, regex)
+    });
+    matches.then(|| found.unwrap_or_else(named))
+}
+
+/// Whether some line of `text` matches on its own, as [`match_text`] requires.
+fn any_line_matches(text: &str, matcher: &Regex) -> bool {
+    let bytes = text.as_bytes();
+    let mut position = 0;
+    while let Some(found) = matcher.find_at(text, position) {
+        let start = found.start();
+        if start == bytes.len() && (bytes.is_empty() || bytes[start - 1] == b'\n') {
+            return false;
+        }
+        let line_start =
+            memchr::memrchr(b'\n', &bytes[position..start]).map_or(position, |i| position + i + 1);
+        let line_end = memchr::memchr(b'\n', &bytes[start..]).map_or(bytes.len(), |i| start + i);
+        let content_end = trim_carriage_return(bytes, line_start, line_end);
+        if matcher.is_match(&text[line_start..content_end]) {
+            return true;
+        }
+        if line_end >= bytes.len() {
+            return false;
+        }
+        position = line_end + 1;
+    }
+    false
 }
 
 /// Read a file as text the way tgrep does: BOM sniffing, lossy UTF-8. Files
@@ -602,6 +684,110 @@ mod tests {
             ..base
         });
         assert_eq!(outcome.matched_lines, 2);
+    }
+
+    /// `(path, matching line numbers)` of each file `pattern` finds.
+    fn found(sources: &[SearchSource], pattern: &str) -> Vec<(String, Vec<usize>)> {
+        let outcome = search(
+            sources,
+            &compile(pattern),
+            &limits(),
+            &AtomicBool::new(false),
+        );
+        outcome
+            .files
+            .iter()
+            .map(|file| {
+                let numbers = lines(file)
+                    .into_iter()
+                    .filter(|line| line.2)
+                    .map(|line| line.0)
+                    .collect();
+                (file.path.clone(), numbers)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn combined_queries_decide_per_file_and_show_the_wanted_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tests")).unwrap();
+        std::fs::write(
+            dir.path().join("src/app.rs"),
+            "fn parse() {}\n\nlet config = 1;\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/only.rs"), "fn parse() {}\n").unwrap();
+        std::fs::write(dir.path().join("tests/it.rs"), "parse(config)\n").unwrap();
+        std::fs::write(dir.path().join("notes.md"), "config notes\n").unwrap();
+        let sources = [indexed_source("repo", dir.path())];
+        let owned = |items: &[(&str, &[usize])]| -> Vec<(String, Vec<usize>)> {
+            items
+                .iter()
+                .map(|(path, lines)| (path.to_string(), lines.to_vec()))
+                .collect()
+        };
+
+        assert_eq!(
+            found(&sources, "parse config"),
+            owned(&[("src/app.rs", &[1, 3]), ("tests/it.rs", &[1])])
+        );
+        assert_eq!(
+            found(&sources, "parse NOT config"),
+            owned(&[("src/only.rs", &[1])])
+        );
+        assert_eq!(
+            found(&sources, "config -path:tests lang:rust"),
+            owned(&[("src/app.rs", &[3])])
+        );
+        assert_eq!(
+            found(&sources, "(parse OR notes) path:*.md"),
+            owned(&[("notes.md", &[1])])
+        );
+        assert_eq!(
+            found(&sources, r#"/fn \w+\(\)/ OR "config notes""#),
+            owned(&[
+                ("notes.md", &[1]),
+                ("src/app.rs", &[1]),
+                ("src/only.rs", &[1])
+            ])
+        );
+        // Only qualifiers: the files, without reading them for lines.
+        assert_eq!(
+            found(&sources, "path:src/*.rs"),
+            owned(&[("src/app.rs", &[]), ("src/only.rs", &[])])
+        );
+        // Only an exclusion: every other file.
+        assert_eq!(found(&sources, "NOT parse"), owned(&[("notes.md", &[])]));
+    }
+
+    #[test]
+    fn repository_qualifiers_skip_whole_repositories() {
+        let (api, web) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(api.path().join("a.rs"), "login\n").unwrap();
+        std::fs::write(web.path().join("a.rs"), "login\n").unwrap();
+        let sources = [
+            indexed_source("api", api.path()),
+            indexed_source("web", web.path()),
+        ];
+        let outcome = search(
+            &sources,
+            &compile("login repo:web"),
+            &limits(),
+            &AtomicBool::new(false),
+        );
+        assert_eq!(outcome.files.len(), 1);
+        assert_eq!(outcome.files[0].repo.name, "web");
+        assert_eq!(outcome.searched_files, 1);
+    }
+
+    #[test]
+    fn a_term_confirmed_across_lines_does_not_count() {
+        let text = "foo\nbar\n";
+        assert!(!any_line_matches(text, &matcher(r"foo\sbar")));
+        assert!(any_line_matches(text, &matcher("bar")));
+        assert!(!any_line_matches("", &matcher("^")));
     }
 
     #[test]
