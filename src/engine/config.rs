@@ -193,7 +193,9 @@ mod tests {
         session.remember(&saved);
         session.scopes.insert(saved.clone(), vec!["dev".into()]);
         session.save(&legacy.join("session.json")).unwrap();
-        Library::default().save(&legacy.join("library.json")).unwrap();
+        Library::default()
+            .save(&legacy.join("library.json"))
+            .unwrap();
 
         let config = ConfigDir::new(dir.path().join("dowse"));
         assert!(config.adopt_legacy(&legacy).unwrap());

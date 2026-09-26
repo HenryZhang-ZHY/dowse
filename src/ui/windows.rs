@@ -75,7 +75,9 @@ impl Windows {
         if let Some(legacy) = super::legacy_config_root()
             && let Err(error) = config.adopt_legacy(&legacy)
         {
-            startup_errors.push(format!("Could not carry over tgrep-gpui's settings: {error:#}"));
+            startup_errors.push(format!(
+                "Could not carry over tgrep-gpui's settings: {error:#}"
+            ));
         }
         if let Err(error) = config.migrate() {
             startup_errors.push(format!("Could not carry over your repositories: {error:#}"));

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -135,6 +135,11 @@ pub struct SearchOutcome {
     pub truncated: bool,
     pub cancelled: bool,
     pub elapsed: Duration,
+    /// Of `elapsed`, the time spent narrowing candidates through the indexes
+    /// and filters, before any file was read.
+    pub candidates_elapsed: Duration,
+    /// Bytes of the files read to match lines.
+    pub bytes_read: u64,
 }
 
 /// One repository to search: its files, and those changed since its index
@@ -172,6 +177,8 @@ pub fn search(
         });
         candidates.extend(paths.into_iter().map(|path| (index, path)));
     }
+    let candidates_elapsed = started.elapsed();
+    let bytes_read = AtomicU64::new(0);
 
     // Files are searched in ordered chunks, each in parallel, so a truncated
     // result is always the first files in order rather than whichever threads
@@ -187,7 +194,7 @@ pub fn search(
                 if cancel.load(Ordering::Relaxed) {
                     return None;
                 }
-                search_file(&sources[*index], path, query, limits)
+                search_file(&sources[*index], path, query, limits, &bytes_read)
             })
             .collect();
         total_lines += found.iter().map(|file| file.matched_lines).sum::<usize>();
@@ -218,6 +225,8 @@ pub fn search(
         truncated,
         cancelled: cancel.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
+        candidates_elapsed,
+        bytes_read: bytes_read.into_inner(),
     }
 }
 
@@ -227,13 +236,18 @@ fn search_file(
     path: &str,
     query: &CompiledQuery,
     limits: &SearchLimits,
+    bytes_read: &AtomicU64,
 ) -> Option<FileMatch> {
     let settled = query.verdict(&source.repo, Some(path));
     let named = || FileMatch::without_lines(&source.repo, path);
     if settled == Some(true) && !query.wants_lines() {
         return Some(named());
     }
-    let Some(text) = read_text(&source.corpus.full_path(path), limits.max_file_size) else {
+    let Some(text) = read_text(
+        &source.corpus.full_path(path),
+        limits.max_file_size,
+        bytes_read,
+    ) else {
         // A binary or oversized file can still match by its qualifiers.
         return (settled == Some(true)).then(named);
     };
@@ -286,12 +300,13 @@ fn any_line_matches(text: &str, matcher: &Regex) -> bool {
 
 /// Read a file as text the way tgrep does: BOM sniffing, lossy UTF-8. Files
 /// containing NUL are treated as binary and skipped.
-fn read_text(path: &std::path::Path, max_file_size: u64) -> Option<String> {
+fn read_text(path: &std::path::Path, max_file_size: u64, bytes_read: &AtomicU64) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > max_file_size {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
+    bytes_read.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     let (text, _) = encoding::decode_owned_with_fixups(bytes, EncodingMode::Auto);
     memchr::memchr(0, text.as_bytes()).is_none().then_some(text)
 }
@@ -770,6 +785,25 @@ mod tests {
         );
         // Only an exclusion: every other file.
         assert_eq!(found(&sources, "NOT parse"), owned(&[("notes.md", &[])]));
+    }
+
+    #[test]
+    fn reports_bytes_read_and_the_time_spent_choosing_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn needle() {}\n").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn other() {}\n").unwrap();
+        let sources = [indexed_source("repo", dir.path())];
+        let cancel = AtomicBool::new(false);
+
+        let outcome = search(&sources, &compile("needle"), &limits(), &cancel);
+        assert_eq!(outcome.searched_files, 1);
+        assert_eq!(outcome.bytes_read, 15);
+        assert!(outcome.candidates_elapsed <= outcome.elapsed);
+
+        // Qualifiers alone decide without reading.
+        let outcome = search(&sources, &compile("path:*.rs"), &limits(), &cancel);
+        assert_eq!(outcome.files.len(), 2);
+        assert_eq!(outcome.bytes_read, 0);
     }
 
     #[test]

@@ -351,7 +351,10 @@ mod tests {
             ["m4", "m5", "detail"]
         );
         assert_eq!(messages(buffer.since(0, LogLevel::Info, 100)), ["m4", "m5"]);
-        assert_eq!(messages(buffer.since(4, LogLevel::Trace, 100)), ["m5", "detail"]);
+        assert_eq!(
+            messages(buffer.since(4, LogLevel::Trace, 100)),
+            ["m5", "detail"]
+        );
         assert_eq!(messages(buffer.since(0, LogLevel::Trace, 1)), ["detail"]);
         assert_eq!(buffer.next_seq(), 7);
         assert_eq!(buffer.counts(), [0, 0, 2, 1, 0]);

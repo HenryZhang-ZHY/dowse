@@ -137,11 +137,11 @@ impl RepoHub {
             Err(error) => {
                 log::error!("could not read the library: {error:#}");
                 (
-                Library::default(),
-                Some(format!(
-                    "{error:#}. Tags will not be saved until it is fixed."
-                )),
-            )
+                    Library::default(),
+                    Some(format!(
+                        "{error:#}. Tags will not be saved until it is fixed."
+                    )),
+                )
             }
         };
         let hub = cx.new(|cx| Self {
@@ -346,7 +346,11 @@ impl RepoHub {
             log::info!(
                 "loaded {id} in {elapsed:.0?}: {} files, {}",
                 corpus.file_count(),
-                if corpus.is_indexed() { "indexed" } else { "scanned, no usable index" }
+                if corpus.is_indexed() {
+                    "indexed"
+                } else {
+                    "scanned, no usable index"
+                }
             );
             this.update(cx, |this, cx| {
                 let Some(state) = this.open.get_mut(&id) else {
