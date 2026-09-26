@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use dowse::diagnostics::metrics::{Origin, SearchRecord, metrics};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
@@ -251,6 +252,7 @@ impl SearchApp {
             if outcome.cancelled {
                 return;
             }
+            metrics().record_search(SearchRecord::new(Origin::Window, &query.pattern, &outcome));
             log::debug!(
                 "searched {:?}: {} lines in {} files, read {} of {} files in {} repositories, {:.1?}",
                 query.pattern,

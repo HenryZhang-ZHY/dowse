@@ -12,6 +12,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::log::{LogEntry, LogLevel};
+use crate::diagnostics::metrics::MetricsSnapshot;
 use crate::engine::config::ConfigDir;
 use crate::engine::facets::{FacetFilter, FacetKind, Facets, ROOT_DIRECTORY};
 use crate::engine::library::Library;
@@ -67,6 +68,8 @@ pub enum Request {
     },
     Status,
     Logs(LogsRequest),
+    /// The app's metrics.
+    Metrics,
     /// Close every window and quit.
     Quit,
 }
@@ -116,6 +119,7 @@ pub enum Frame {
     Repos(Vec<RepoStatus>),
     Status(AppStatus),
     Log(LogEntry),
+    Metrics(Box<MetricsSnapshot>),
     /// Something done, for a person to read.
     Message(String),
     Done,

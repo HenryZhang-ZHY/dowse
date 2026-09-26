@@ -174,6 +174,7 @@ fn execute(command: CliCommand) -> io::Result<i32> {
                 });
                 return print_frames(send(request)?, json);
             }
+            DevAction::Metrics { json } => return print_frames(send(Request::Metrics)?, json),
         },
     };
     print_frames(send(request)?, false)
@@ -207,6 +208,10 @@ fn print_frames(frames: crate::ipc::Frames, json: bool) -> io::Result<i32> {
             }
             Frame::Status(status) if json => writeln!(stdout, "{}", to_json(&status))?,
             Frame::Status(status) => stdout.write_all(output::status_text(&status).as_bytes())?,
+            Frame::Metrics(metrics) if json => writeln!(stdout, "{}", to_json(&metrics))?,
+            Frame::Metrics(metrics) => {
+                stdout.write_all(output::metrics_text(&metrics).as_bytes())?
+            }
             Frame::Log(entry) if json => writeln!(stdout, "{}", to_json(&entry))?,
             Frame::Log(entry) => {
                 stdout.write_all(output::log_line(&entry, style).as_bytes())?;

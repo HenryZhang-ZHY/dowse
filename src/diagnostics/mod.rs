@@ -2,3 +2,4 @@
 //! developer tools window and `dowse dev`. Nothing here depends on the UI.
 
 pub mod log;
+pub mod metrics;

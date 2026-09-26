@@ -38,7 +38,7 @@ Commands (`dowse <COMMAND> --help` tells more):
   index    Rebuild the indexes of repositories
   status   Show what the running app is doing
   quit     Quit the running app, closing its windows
-  dev      The running app's logs, for finding out what went wrong
+  dev      The running app's logs and metrics
   guide    Print the guide to using dowse, written for coding agents
 ";
 

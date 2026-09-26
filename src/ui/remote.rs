@@ -20,6 +20,7 @@ use gpui_kit::*;
 use super::hub::{IndexActivity, RepoHub};
 use super::windows::Windows;
 use dowse::diagnostics::log as app_log;
+use dowse::diagnostics::metrics::{Origin, SearchRecord, metrics};
 use dowse::engine::index::{IndexStatus, RepoIndex};
 use dowse::engine::query::CompiledQuery;
 use dowse::engine::repo::{self, RepoInfo};
@@ -135,6 +136,7 @@ impl Remote {
 pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut App) {
     cx.global_mut::<Remote>().last_request = Some(Instant::now());
     log::info!("command line: {}", describe(&envelope.request));
+    metrics().count_request(kind(&envelope.request));
     let cwd = envelope.cwd;
     let result = match envelope.request {
         Request::Search(request) => {
@@ -143,6 +145,7 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
         }
         Request::Repos(scope) => repos(&scope, &cwd, cx).map(|repos| vec![Frame::Repos(repos)]),
         Request::Status => Ok(vec![Frame::Status(status(cx))]),
+        Request::Metrics => Ok(vec![Frame::Metrics(Box::new(metrics().snapshot()))]),
         Request::AddRepos { folders, tags } => add_repos(&folders, &tags, cx),
         Request::Tag { repo, add, remove } => tag(&repo, &add, &remove, &cwd, cx),
         Request::Index { scope, wait } => {
@@ -182,6 +185,21 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
     }
 }
 
+/// A request's kind, for counting.
+fn kind(request: &Request) -> &'static str {
+    match request {
+        Request::Search(_) => "search",
+        Request::Repos(_) => "repos",
+        Request::Status => "status",
+        Request::AddRepos { .. } => "repos add",
+        Request::Tag { .. } => "repos tag",
+        Request::Index { .. } => "index",
+        Request::Logs(_) => "dev logs",
+        Request::Metrics => "dev metrics",
+        Request::Quit => "quit",
+    }
+}
+
 /// A request in a few words, for the log.
 fn describe(request: &Request) -> String {
     match request {
@@ -193,6 +211,7 @@ fn describe(request: &Request) -> String {
         Request::Index { .. } => "index".into(),
         Request::Logs(_) => "logs".into(),
         Request::Quit => "quit".into(),
+        Request::Metrics => "metrics".into(),
     }
 }
 
@@ -246,6 +265,11 @@ fn search(request: SearchRequest, cwd: &Path, reply: Sender<Frame>, cx: &mut App
         let response = cx
             .background_spawn(async move {
                 let outcome = search::search(&sources, &compiled, &limits, &AtomicBool::new(false));
+                metrics().record_search(SearchRecord::new(
+                    Origin::Cli,
+                    &request.query.pattern,
+                    &outcome,
+                ));
                 let mut response = SearchResponse::new(&outcome, request.limit, request.files_only);
                 if let Some(format) = request.table {
                     let visible: Vec<usize> = (0..outcome.files.len()).collect();
@@ -257,13 +281,6 @@ fn search(request: SearchRequest, cwd: &Path, reply: Sender<Frame>, cx: &mut App
                 response
             })
             .await;
-        log::debug!(
-            "command-line search {:?}: {} lines in {} files, {:.1} ms",
-            request.query.pattern,
-            response.summary.matched_lines,
-            response.summary.files,
-            response.summary.elapsed_ms
-        );
         reply.send(Frame::Search(Box::new(response))).await.ok();
         reply.send(Frame::Done).await.ok();
     })

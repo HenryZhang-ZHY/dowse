@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use crate::diagnostics::log::{LogEntry, format_time};
+use crate::diagnostics::metrics::{MetricsSnapshot, TimingSummary};
 use crate::ipc::protocol::{AppStatus, FacetCounts, FileHit, RepoStatus, SearchResponse};
 
 /// Whether to colour text for a terminal.
@@ -378,6 +379,78 @@ pub fn log_line(entry: &LogEntry, style: Style) -> String {
     )
 }
 
+pub fn metrics_text(metrics: &MetricsSnapshot) -> String {
+    let mut out = String::new();
+    let memory = metrics
+        .memory_bytes
+        .map_or_else(String::new, |memory| format!(" · memory {}", bytes(memory)));
+    let _ = writeln!(out, "up {}{memory}", duration(metrics.uptime_ms));
+    let timing = |out: &mut String, name: &str, timing: &TimingSummary| {
+        let _ = writeln!(
+            out,
+            "{name:<16} {:>6}  p50 {:>9}  p95 {:>9}  max {:>9}",
+            number(timing.count as usize),
+            ms(timing.p50_ms),
+            ms(timing.p95_ms),
+            ms(timing.max_ms)
+        );
+    };
+    timing(&mut out, "window searches", &metrics.window_searches);
+    timing(&mut out, "cli searches", &metrics.cli_searches);
+    timing(&mut out, "index loads", &metrics.index_loads);
+    timing(&mut out, "index builds", &metrics.index_builds);
+    if metrics.index_build_failures > 0 {
+        let _ = writeln!(out, "index builds failed: {}", metrics.index_build_failures);
+    }
+    let _ = writeln!(
+        out,
+        "the indexes spared {:.1}% of file reads",
+        metrics.index_savings * 100.0
+    );
+    let [errors, warnings, ..] = metrics.log_counts;
+    let _ = writeln!(
+        out,
+        "log: {}, {}",
+        plural(errors, "error", "errors"),
+        plural(warnings, "warning", "warnings")
+    );
+    if !metrics.requests.is_empty() {
+        let requests: Vec<String> = metrics
+            .requests
+            .iter()
+            .map(|(kind, count)| format!("{kind} {count}"))
+            .collect();
+        let _ = writeln!(out, "requests: {}", requests.join(", "));
+    }
+    if !metrics.recent_searches.is_empty() {
+        let _ = writeln!(out, "latest searches:");
+        for search in metrics.recent_searches.iter().take(10) {
+            let _ = writeln!(
+                out,
+                "  {}  {:<6} {:>9}  read {}/{}  {} in {}  {:?}",
+                &format_time(search.time_ms)[11..19],
+                search.origin.name(),
+                ms(search.elapsed_ms),
+                number(search.searched_files),
+                number(search.corpus_files),
+                plural(search.matched_lines, "line", "lines"),
+                plural(search.files, "file", "files"),
+                search.query
+            );
+        }
+    }
+    out
+}
+
+/// `12.3 ms`, or `4.1 s` past a second.
+pub fn ms(value: f64) -> String {
+    if value >= 1000.0 {
+        format!("{:.1} s", value / 1000.0)
+    } else {
+        format!("{value:.1} ms")
+    }
+}
+
 // ----- numbers ------------------------------------------------------------------
 
 /// `12,345`.
@@ -633,6 +706,54 @@ mod tests {
         let path = PathBuf::from("/src/api/src/a.rs").display().to_string();
         assert!(file_list(&response()).starts_with(&format!("{path}\n")));
         assert!(file_counts(&response()).starts_with(&format!("{path}:5\n")));
+    }
+
+    #[test]
+    fn metrics_read_as_a_few_lines() {
+        use crate::diagnostics::metrics::{Origin, SearchRecord};
+        let metrics = MetricsSnapshot {
+            uptime_ms: 125_000,
+            memory_bytes: Some(200 * 1024 * 1024),
+            cli_searches: TimingSummary {
+                count: 3,
+                mean_ms: 10.0,
+                p50_ms: 8.0,
+                p95_ms: 20.0,
+                max_ms: 1500.0,
+            },
+            index_savings: 0.973,
+            log_counts: [1, 2, 3, 0, 0],
+            requests: [("search".to_string(), 3)].into(),
+            recent_searches: vec![SearchRecord {
+                time_ms: 1_790_410_542_123,
+                origin: Origin::Cli,
+                query: "parse".into(),
+                repos: 1,
+                corpus_files: 9000,
+                searched_files: 12,
+                files: 2,
+                matched_lines: 5,
+                truncated: false,
+                elapsed_ms: 8.25,
+                candidates_ms: 1.0,
+                bytes_read: 100,
+            }],
+            ..Default::default()
+        };
+        let text = metrics_text(&metrics);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "up 2m · memory 200.0 MB");
+        assert_eq!(
+            lines[2],
+            "cli searches          3  p50    8.0 ms  p95   20.0 ms  max     1.5 s"
+        );
+        assert_eq!(lines[5], "the indexes spared 97.3% of file reads");
+        assert_eq!(lines[6], "log: 1 error, 2 warnings");
+        assert_eq!(lines[7], "requests: search 3");
+        assert_eq!(
+            lines[9],
+            "  08:15:42  cli       8.2 ms  read 12/9,000  5 lines in 2 files  \"parse\""
+        );
     }
 
     #[test]

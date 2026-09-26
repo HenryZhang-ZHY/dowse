@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use gpui_kit::*;
 
 use crate::format;
+use dowse::diagnostics::metrics::metrics;
 use dowse::engine::index::{Corpus, IndexStatus, RepoIndex};
 use dowse::engine::library::{Library, LibraryEntry};
 use dowse::engine::repo::{self, RepoInfo};
@@ -405,6 +406,7 @@ impl RepoHub {
                     (status, corpus, stale, started.elapsed())
                 })
                 .await;
+            metrics().record_index_load(elapsed);
             log::info!(
                 "loaded {id} in {elapsed:.0?}: {} files, {}",
                 corpus.file_count(),
@@ -499,6 +501,7 @@ impl RepoHub {
                 Ok(staged) => staged,
                 Err(error) => {
                     log::error!("indexing {id} failed: {error:#}");
+                    metrics().record_index_build(started.elapsed(), false);
                     this.update(cx, |this, cx| {
                         if let Some(state) = this.open.get_mut(&id) {
                             state.activity = IndexActivity::Failed(format!("{error:#}"));
@@ -536,6 +539,7 @@ impl RepoHub {
                     state.corpus = Some(Arc::new(corpus));
                     match &published {
                         Ok(()) => {
+                            metrics().record_index_build(started.elapsed(), true);
                             log::info!(
                                 "indexed {id} in {:.1?}: {} files",
                                 started.elapsed(),
@@ -549,6 +553,7 @@ impl RepoHub {
                         }
                         Err(error) => {
                             log::error!("publishing the index of {id} failed: {error:#}");
+                            metrics().record_index_build(started.elapsed(), false);
                             state.activity = IndexActivity::Failed(format!("{error:#}"));
                         }
                     }

@@ -57,7 +57,8 @@ Exit status: 0 when something matched, 1 when nothing did, 2 on error."
     Status(JsonArg),
     /// Quit the running app, closing its windows.
     Quit,
-    /// The running app's logs, for finding out what went wrong.
+    /// The running app's logs and metrics, for finding out what went wrong
+    /// and where time goes.
     Dev(DevArgs),
     /// Print the guide to using dowse, written for coding agents.
     Guide,
@@ -219,6 +220,12 @@ pub enum DevAction {
         /// Keep printing records as they come.
         #[arg(short, long)]
         follow: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the app's key numbers: search and index timings, how much the
+    /// indexes saved, memory, requests and the latest searches.
+    Metrics {
         #[arg(long)]
         json: bool,
     },
