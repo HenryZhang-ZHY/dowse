@@ -65,6 +65,7 @@ pub struct SnippetLine {
 
 impl SnippetLine {
     #[cfg(test)]
+    #[allow(clippy::single_range_in_vec_init)]
     pub(crate) fn for_test(number: usize, text: &str, is_match: bool) -> Self {
         Self {
             number,

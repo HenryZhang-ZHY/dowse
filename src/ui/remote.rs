@@ -533,7 +533,7 @@ fn status(cx: &App) -> AppStatus {
     let remote = cx.global::<Remote>();
     let windows = Windows::count(cx);
     let quits_in_ms = (windows == 0)
-        .then(|| remote.last_request)
+        .then_some(remote.last_request)
         .flatten()
         .map(|last| IDLE_TIMEOUT.saturating_sub(last.elapsed()).as_millis() as u64);
     let (building, queued) = hub.build_queue();
