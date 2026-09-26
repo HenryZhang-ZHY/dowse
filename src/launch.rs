@@ -35,7 +35,7 @@ Options:
 Commands (`dowse <COMMAND> --help` tells more):
   search   Search the repositories dowse knows, in GitHub code search syntax
   repos    List the repositories dowse knows, add them and tag them
-  index    Rebuild the indexes of repositories
+  index    Bring the indexes of repositories up to date
   status   Show what the running app is doing
   quit     Quit the running app, closing its windows
   dev      The running app's logs and metrics

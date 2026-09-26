@@ -51,7 +51,7 @@ Exit status: 0 when something matched, 1 when nothing did, 2 on error."
     Search(SearchArgs),
     /// List the repositories dowse knows, add them and tag them.
     Repos(ReposArgs),
-    /// Rebuild the indexes of repositories.
+    /// Bring the indexes of repositories up to date.
     Index(IndexArgs),
     /// Show what the running app is doing.
     Status(JsonArg),
