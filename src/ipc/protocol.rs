@@ -70,6 +70,8 @@ pub enum Request {
     Logs(LogsRequest),
     /// The app's metrics.
     Metrics,
+    /// Open the developer tools window.
+    OpenDevTools,
     /// Close every window and quit.
     Quit,
 }

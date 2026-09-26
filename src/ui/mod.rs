@@ -3,6 +3,7 @@
 //! and tagging the workspace's repositories.
 
 mod app;
+mod devtools;
 mod highlight;
 mod hub;
 mod palette;
@@ -25,6 +26,8 @@ use dowse::launch::Command;
 
 /// Key context of the main view, which the bindings below are scoped to.
 pub(crate) const CONTEXT: &str = "SearchApp";
+/// Key context of the developer tools window.
+pub(crate) const DEVTOOLS_CONTEXT: &str = "DevTools";
 
 actions!(
     dowse,
@@ -54,6 +57,7 @@ actions!(
         CopyResultsAsTsv,
         CopyResultsAsMarkdown,
         CommandPalette,
+        ToggleDevTools,
         Quit,
     ]
 );
@@ -87,6 +91,10 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("f4", NextMatch, Some(CONTEXT)),
         KeyBinding::new("shift-f4", PreviousMatch, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-e", ExportResults, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-i", ToggleDevTools, Some(CONTEXT)),
+        KeyBinding::new("f12", ToggleDevTools, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-i", ToggleDevTools, Some(DEVTOOLS_CONTEXT)),
+        KeyBinding::new("f12", ToggleDevTools, Some(DEVTOOLS_CONTEXT)),
     ]);
     // VS Code's search toggles. On macOS plain alt-letter types a character.
     #[cfg(target_os = "macos")]
@@ -108,6 +116,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
     cx.on_action(|_: &NewWindow, cx| {
         windows::Windows::new_window(cx);
     });
+    cx.on_action(|_: &ToggleDevTools, cx| devtools::open(cx));
 }
 
 /// Restore the last session's windows and carry out `command`, then carry

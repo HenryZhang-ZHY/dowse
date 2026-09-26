@@ -441,6 +441,13 @@ impl SearchApp {
             );
         }
         commands.push(
+            command("View", "Developer Tools", Lucide::Bug, |_, _, cx| {
+                super::devtools::open(cx);
+            })
+            .action(ToggleDevTools)
+            .keywords(&["logs", "metrics", "debug", "devtools"]),
+        );
+        commands.push(
             command(
                 "View",
                 "Toggle Light and Dark Theme",

@@ -175,6 +175,7 @@ fn execute(command: CliCommand) -> io::Result<i32> {
                 return print_frames(send(request)?, json);
             }
             DevAction::Metrics { json } => return print_frames(send(Request::Metrics)?, json),
+            DevAction::Open => Request::OpenDevTools,
         },
     };
     print_frames(send(request)?, false)

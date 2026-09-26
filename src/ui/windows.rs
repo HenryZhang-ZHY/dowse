@@ -8,6 +8,7 @@ use gpui_kit::component::Root;
 use gpui_kit::*;
 
 use super::app::{SearchApp, TabsOpening};
+use super::devtools;
 use super::hub::RepoHub;
 use super::remote::Remote;
 use dowse::engine::config::ConfigDir;
@@ -353,23 +354,28 @@ impl Windows {
         Self::save(cx);
     }
 
-    /// A window closed. When it was the last one the app quits, unless the
-    /// command line is using it, and the session keeps the window, to open
-    /// it again next time.
+    /// A window closed. When it was the last search window, the developer
+    /// tools close with it and the app quits, unless the command line is
+    /// using it; the session keeps the window, to open it again next time.
     pub(super) fn closed(cx: &mut App) {
         let open = cx.windows();
-        cx.global_mut::<Self>()
-            .open
-            .retain(|window| open.contains(&window.handle));
-        log::info!("closed a window; {} left", open.len());
-        if open.is_empty() {
-            if Remote::keeps_app_running(cx) {
-                log::info!("staying in the background for the command line");
-            } else {
-                cx.quit();
-            }
-        } else {
+        devtools::forget_if_closed(&open, cx);
+        let windows = cx.global_mut::<Self>();
+        let before = windows.open.len();
+        windows.open.retain(|window| open.contains(&window.handle));
+        let left = windows.open.len();
+        log::info!("closed a window; {left} search windows left");
+        if left > 0 {
             Self::save(cx);
+            return;
+        }
+        if before > 0 {
+            devtools::close(cx);
+        }
+        if Remote::keeps_app_running(cx) {
+            log::info!("staying in the background for the command line");
+        } else if !devtools::is_open(cx) {
+            cx.quit();
         }
     }
 
@@ -433,7 +439,7 @@ impl Windows {
             .filter_map(|window| window.app.upgrade())
             .map(|app| app.read(cx).session_state(cx))
             .collect();
-        let quitting = cx.windows().is_empty();
+        let quitting = states.is_empty();
         let windows = cx.global_mut::<Self>();
         windows.save_pending = false;
         if quitting {

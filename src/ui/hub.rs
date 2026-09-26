@@ -317,6 +317,11 @@ impl RepoHub {
         })
     }
 
+    /// Snapshots of every open repository, sorted by name.
+    pub(super) fn open_views(&self) -> Vec<RepoView> {
+        self.views(self.open.keys())
+    }
+
     pub(super) fn open_count(&self) -> usize {
         self.open.len()
     }

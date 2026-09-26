@@ -229,6 +229,8 @@ pub enum DevAction {
         #[arg(long)]
         json: bool,
     },
+    /// Open the developer tools window.
+    Open,
 }
 
 fn parse_level(text: &str) -> Result<LogLevel, String> {

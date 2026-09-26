@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use async_channel::Sender;
 use gpui_kit::*;
 
+use super::devtools;
 use super::hub::{IndexActivity, RepoHub};
 use super::windows::Windows;
 use dowse::diagnostics::log as app_log;
@@ -105,7 +106,7 @@ impl Remote {
                 }
             });
         }
-        if Windows::count(cx) == 0 && !Self::keeps_app_running(cx) {
+        if Windows::count(cx) == 0 && !Self::keeps_app_running(cx) && !devtools::is_open(cx) {
             log::info!("no windows and no command-line requests for a while; quitting");
             cx.quit();
         }
@@ -146,6 +147,10 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
         Request::Repos(scope) => repos(&scope, &cwd, cx).map(|repos| vec![Frame::Repos(repos)]),
         Request::Status => Ok(vec![Frame::Status(status(cx))]),
         Request::Metrics => Ok(vec![Frame::Metrics(Box::new(metrics().snapshot()))]),
+        Request::OpenDevTools => {
+            devtools::open(cx);
+            Ok(vec![Frame::Message("opened the developer tools".into())])
+        }
         Request::AddRepos { folders, tags } => add_repos(&folders, &tags, cx),
         Request::Tag { repo, add, remove } => tag(&repo, &add, &remove, &cwd, cx),
         Request::Index { scope, wait } => {
@@ -196,6 +201,7 @@ fn kind(request: &Request) -> &'static str {
         Request::Index { .. } => "index",
         Request::Logs(_) => "dev logs",
         Request::Metrics => "dev metrics",
+        Request::OpenDevTools => "dev open",
         Request::Quit => "quit",
     }
 }
@@ -212,6 +218,7 @@ fn describe(request: &Request) -> String {
         Request::Logs(_) => "logs".into(),
         Request::Quit => "quit".into(),
         Request::Metrics => "metrics".into(),
+        Request::OpenDevTools => "open the developer tools".into(),
     }
 }
 
