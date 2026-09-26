@@ -5,6 +5,7 @@ mod assets;
 mod cli;
 mod editor;
 mod format;
+mod fuzzy;
 mod instance;
 #[cfg(windows)]
 mod shell;

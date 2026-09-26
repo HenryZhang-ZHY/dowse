@@ -90,6 +90,7 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_export_results))
             .on_action(cx.listener(Self::on_copy_results_as_tsv))
             .on_action(cx.listener(Self::on_copy_results_as_markdown))
+            .on_action(cx.listener(Self::on_command_palette))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths.paths(), window, cx)
             }))
@@ -212,6 +213,16 @@ impl SearchApp {
                     .flex_none()
                     .ml_auto()
                     .gap_1()
+                    .child(
+                        Button::new("command-palette")
+                            .ghost()
+                            .small()
+                            .icon(Lucide::Command)
+                            .tooltip("Command palette (Ctrl+K)")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_palette(window, cx)),
+                            ),
+                    )
                     .child(repositories_button)
                     .child(
                         Button::new("toggle-theme")

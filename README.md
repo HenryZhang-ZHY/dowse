@@ -96,8 +96,13 @@ you develop in.
   or an edit in a working copy shows up right away. After 2,000 changes a repository is
   re-indexed automatically. Rebuilds happen in a staging directory, so searching keeps
   working while one runs.
+- **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works) lists
+  every command with its shortcut, plus the open tabs, the scope's tags, recent
+  workspaces and the query qualifiers, which it adds to the query. Type a few letters
+  of the name in order, `nt` for New Tab, and press `Enter`; `Esc` clears the
+  filter, then closes.
 - Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
-  page, `Ctrl+F`/`Ctrl+K` focus the search box, `Ctrl+P` the path filter, and
+  page, `Ctrl+F` focuses the search box, `Ctrl+P` the path filter, and
   `Ctrl+Shift+R` rebuilds the indexes in scope. `Ctrl+Shift+N` opens a new window,
   `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one.
 
@@ -139,11 +144,12 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | Path | What it holds |
 | --- | --- |
 | `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `highlight.rs` colours code by language. |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language. |
 | `src/cli.rs` | The command line. |
 | `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
 | `src/shell.rs` | Explorer integration on Windows. |
 | `src/editor.rs` | Launching an editor at a line. |
+| `src/fuzzy.rs` | Fuzzy matching for the command palette. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 
 ## How a search runs

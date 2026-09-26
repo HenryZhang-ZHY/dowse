@@ -5,6 +5,7 @@
 mod app;
 mod highlight;
 mod hub;
+mod palette;
 mod preview;
 mod render;
 mod repos;
@@ -51,6 +52,7 @@ actions!(
         ExportResults,
         CopyResultsAsTsv,
         CopyResultsAsMarkdown,
+        CommandPalette,
         Quit,
     ]
 );
@@ -63,7 +65,8 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("secondary-o", AddRepository, Some(CONTEXT)),
         KeyBinding::new("secondary-,", ShowRepositories, Some(CONTEXT)),
         KeyBinding::new("secondary-f", FocusSearch, Some(CONTEXT)),
-        KeyBinding::new("secondary-k", FocusSearch, Some(CONTEXT)),
+        KeyBinding::new("secondary-k", CommandPalette, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-p", CommandPalette, Some(CONTEXT)),
         KeyBinding::new("secondary-p", FocusPathFilter, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-r", RebuildIndex, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-n", NewWindow, Some(CONTEXT)),
