@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, KeyBinding, actions};
 
-use crate::cli::Command;
 use dowse::engine::repo;
+use dowse::launch::Command;
 
 /// Key context of the main view, which the bindings below are scoped to.
 pub(crate) const CONTEXT: &str = "SearchApp";

@@ -9,7 +9,7 @@ use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream, prelude::*,
 };
 
-use crate::cli::Command;
+use crate::launch::Command;
 
 /// What this launch does.
 pub enum Launch {

@@ -9,10 +9,10 @@ use gpui_kit::*;
 
 use super::app::{SearchApp, TabsOpening};
 use super::hub::RepoHub;
-use crate::cli::Command;
 use dowse::engine::config::ConfigDir;
 use dowse::engine::repo;
 use dowse::engine::session::{Session, WindowSession};
+use dowse::launch::Command;
 
 /// How far each new window is offset from the previous one.
 const CASCADE: f32 = 28.;

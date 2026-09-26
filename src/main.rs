@@ -2,25 +2,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod assets;
-mod cli;
 mod editor;
 mod format;
 mod fuzzy;
-mod instance;
 #[cfg(windows)]
 mod shell;
 mod ui;
 
-use cli::Command;
 use dowse::engine::config::ConfigDir;
-use instance::Launch;
+use dowse::ipc::{self, Launch};
+use dowse::launch::{self, Command};
 
 fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let command = match cli::parse(std::env::args_os().skip(1), &cwd) {
+    let command = match launch::parse(std::env::args_os().skip(1), &cwd) {
         Ok(Command::Help) => {
             attach_console();
-            print!("{}", cli::USAGE);
+            print!("{}", launch::USAGE);
             return;
         }
         Ok(command) => command,
@@ -32,7 +30,7 @@ fn main() {
     };
 
     let config_root = ui::config_root();
-    let commands = match instance::claim(&config_root, &command) {
+    let commands = match ipc::claim(&config_root, &command) {
         Launch::Forwarded => return,
         Launch::Primary(commands) => commands,
     };

@@ -1,4 +1,4 @@
-//! The command line, modelled on VS Code's `code`:
+//! Launching the desktop app, modelled on VS Code's `code`:
 //!
 //! - `dowse` restores the last session.
 //! - `dowse <folder>...` opens the folders as a new untitled workspace;
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use dowse::engine::workspace;
+use crate::engine::workspace;
 
 pub const USAGE: &str = "\
 Usage: dowse [OPTIONS] [PATH...]
