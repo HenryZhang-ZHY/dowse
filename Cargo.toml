@@ -23,6 +23,7 @@ tgrep-core = { git = "https://github.com/microsoft/tgrep", rev = "69e4fd05674403
 which = "7"
 dirs = "6"
 interprocess = "2.4.4"
+log = "0.4"
 async-channel = "2"
 
 [dev-dependencies]

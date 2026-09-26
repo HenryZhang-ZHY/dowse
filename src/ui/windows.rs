@@ -132,6 +132,7 @@ impl Windows {
     /// Carry out a command a later launch forwarded. Launching without
     /// arguments opens a new window, as `code` does.
     pub(super) fn forwarded(command: Command, cx: &mut App) {
+        log::info!("a later launch asked for {command:?}");
         match command {
             Command::Start => Self::new_window(cx),
             command => Self::run(command, cx),
@@ -255,6 +256,7 @@ impl Windows {
             })
             .ok()?;
         let app = app?;
+        log::info!("opened a window");
         let workspace = app
             .upgrade()
             .and_then(|app| app.read(cx).workspace_file().map(Path::to_path_buf));
@@ -336,6 +338,7 @@ impl Windows {
         cx.global_mut::<Self>()
             .open
             .retain(|window| open.contains(&window.handle));
+        log::info!("closed a window; {} left", open.len());
         if open.is_empty() {
             cx.quit();
         } else {
@@ -419,6 +422,8 @@ impl Windows {
             return;
         }
         // Failing to remember windows is not worth interrupting anyone for.
-        windows.session.save(&windows.config.session_file()).ok();
+        if let Err(error) = windows.session.save(&windows.config.session_file()) {
+            log::warn!("could not save the session: {error:#}");
+        }
     }
 }

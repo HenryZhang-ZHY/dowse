@@ -35,6 +35,11 @@ impl ConfigDir {
         self.root.join("session.json")
     }
 
+    /// The app's log files.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
     /// Where workspace files are saved unless the user picks elsewhere.
     pub fn workspaces_dir(&self) -> PathBuf {
         self.root.join("workspaces")

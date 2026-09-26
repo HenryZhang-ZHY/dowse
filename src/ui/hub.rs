@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::*;
 
@@ -134,12 +134,15 @@ impl RepoHub {
     pub(super) fn init(library_file: PathBuf, cx: &mut App) -> Option<String> {
         let (library, error) = match Library::load(&library_file) {
             Ok(library) => (library, None),
-            Err(error) => (
+            Err(error) => {
+                log::error!("could not read the library: {error:#}");
+                (
                 Library::default(),
                 Some(format!(
                     "{error:#}. Tags will not be saved until it is fixed."
                 )),
-            ),
+            )
+            }
         };
         let hub = cx.new(|cx| Self {
             library,
@@ -238,6 +241,7 @@ impl RepoHub {
         let Some(entry) = self.library.get(path).cloned() else {
             return;
         };
+        log::info!("opening {}", entry.path.display());
         let mut state = RepoState::open(&entry);
         state.users = 1;
         let loadable = state.index.is_some();
@@ -256,6 +260,7 @@ impl RepoHub {
         state.users = state.users.saturating_sub(1);
         if state.users == 0 {
             // Dropping the state drops its watcher and any running build.
+            log::info!("closing {id}");
             self.open.remove(id);
             self.start_next_build(cx);
         }
@@ -331,9 +336,18 @@ impl RepoHub {
         state.activity = IndexActivity::Loading;
         let id = id.to_string();
         state.load_task = Some(cx.spawn(async move |this, cx| {
-            let (status, corpus) = cx
-                .background_spawn(async move { (index.index_status(), index.load_corpus()) })
+            let (status, corpus, elapsed) = cx
+                .background_spawn(async move {
+                    let started = Instant::now();
+                    let loaded = (index.index_status(), index.load_corpus());
+                    (loaded.0, loaded.1, started.elapsed())
+                })
                 .await;
+            log::info!(
+                "loaded {id} in {elapsed:.0?}: {} files, {}",
+                corpus.file_count(),
+                if corpus.is_indexed() { "indexed" } else { "scanned, no usable index" }
+            );
             this.update(cx, |this, cx| {
                 let Some(state) = this.open.get_mut(&id) else {
                     return;
@@ -404,6 +418,8 @@ impl RepoHub {
         let mark = tracker.as_ref().map(|tracker| tracker.mark());
         state.activity = IndexActivity::Building;
         let id = id.to_string();
+        log::info!("building the index of {id}");
+        let started = Instant::now();
         state.index_task = Some(cx.spawn(async move |this, cx| {
             let builder = index.clone();
             let staged = cx
@@ -412,6 +428,7 @@ impl RepoHub {
             let staged = match staged {
                 Ok(staged) => staged,
                 Err(error) => {
+                    log::error!("indexing {id} failed: {error:#}");
                     this.update(cx, |this, cx| {
                         if let Some(state) = this.open.get_mut(&id) {
                             state.activity = IndexActivity::Failed(format!("{error:#}"));
@@ -445,16 +462,25 @@ impl RepoHub {
 
             this.update(cx, |this, cx| {
                 if let Some(state) = this.open.get_mut(&id) {
+                    let files = corpus.file_count();
                     state.corpus = Some(Arc::new(corpus));
-                    match published {
+                    match &published {
                         Ok(()) => {
+                            log::info!(
+                                "indexed {id} in {:.1?}: {} files",
+                                started.elapsed(),
+                                files
+                            );
                             if let (Some(tracker), Some(mark)) = (tracker, mark) {
                                 tracker.forget_before(mark);
                                 state.changed_files = tracker.changed_count();
                             }
                             state.activity = IndexActivity::Idle(status);
                         }
-                        Err(error) => state.activity = IndexActivity::Failed(format!("{error:#}")),
+                        Err(error) => {
+                            log::error!("publishing the index of {id} failed: {error:#}");
+                            state.activity = IndexActivity::Failed(format!("{error:#}"));
+                        }
                     }
                 }
                 cx.emit(HubEvent::CorpusChanged(id));
@@ -494,6 +520,10 @@ impl RepoHub {
             }
             let branch = repo::current_branch(&state.info.root);
             if branch != state.info.branch {
+                log::info!(
+                    "{id} switched to branch {}",
+                    branch.as_deref().unwrap_or("(none)")
+                );
                 let mut info = (*state.info).clone();
                 info.branch = branch;
                 state.info = Arc::new(info);
@@ -504,6 +534,7 @@ impl RepoHub {
                 IndexActivity::Idle(IndexStatus::Ready { .. })
             );
             if ready && count >= AUTO_REINDEX_CHANGES {
+                log::info!("{count} files changed in {id}; re-indexing");
                 reindex.push(id.clone());
             }
         }
@@ -524,8 +555,17 @@ impl RepoState {
         let index = RepoIndex::open(&entry.path).ok();
         let tracker = index
             .as_ref()
-            .and_then(|index| ChangeTracker::start(index.root()).ok())
+            .and_then(|index| {
+                ChangeTracker::start(index.root())
+                    .inspect_err(|error| {
+                        log::warn!("not watching {}: {error}", entry.path.display());
+                    })
+                    .ok()
+            })
             .map(Arc::new);
+        if index.is_none() {
+            log::warn!("{} does not exist", entry.path.display());
+        }
         Self {
             info: Arc::new(RepoInfo {
                 id: entry.path.to_string_lossy().into_owned(),

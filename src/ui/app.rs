@@ -251,6 +251,16 @@ impl SearchApp {
             if outcome.cancelled {
                 return;
             }
+            log::debug!(
+                "searched {:?}: {} lines in {} files, read {} of {} files in {} repositories, {:.1?}",
+                query.pattern,
+                outcome.matched_lines,
+                outcome.files.len(),
+                outcome.searched_files,
+                outcome.corpus_files,
+                outcome.repos,
+                outcome.elapsed
+            );
             this.update(cx, |this, cx| {
                 if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
                     let tab = &mut this.tabs[index];

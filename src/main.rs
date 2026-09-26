@@ -12,6 +12,7 @@ mod shell;
 mod ui;
 
 use cli::Command;
+use dowse::engine::config::ConfigDir;
 use instance::Launch;
 
 fn main() {
@@ -35,6 +36,13 @@ fn main() {
         Launch::Forwarded => return,
         Launch::Primary(commands) => commands,
     };
+    dowse::diagnostics::log::init(&ConfigDir::new(&config_root).logs_dir());
+    log::info!(
+        "dowse {} starting, pid {}, settings in {}",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        config_root.display()
+    );
 
     gpui_kit::application()
         .with_assets(assets::AppAssets)
