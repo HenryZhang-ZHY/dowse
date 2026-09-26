@@ -5,29 +5,55 @@ mod assets;
 mod cli;
 mod editor;
 mod format;
+mod instance;
 mod ui;
 
 use cli::Command;
+use instance::Launch;
 
 fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
     let command = match cli::parse(std::env::args_os().skip(1), &cwd) {
         Ok(Command::Help) => {
+            attach_console();
             print!("{}", cli::USAGE);
             return;
         }
         Ok(command) => command,
         Err(error) => {
+            attach_console();
             eprintln!("tgrep-gpui: {error}");
             std::process::exit(2);
         }
+    };
+
+    let config_root = ui::config_root();
+    let commands = match instance::claim(&config_root, &command) {
+        Launch::Forwarded => return,
+        Launch::Primary(commands) => commands,
     };
 
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            ui::init(cx);
-            ui::start(command, cx);
+            ui::init(config_root, cx);
+            ui::start(command, commands, cx);
         });
+}
+
+/// Release builds on Windows have no console of their own; write `--help`
+/// and errors to the console that started them.
+fn attach_console() {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        unsafe extern "system" {
+            fn AttachConsole(process_id: u32) -> i32;
+        }
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+        // SAFETY: no pointers; without a parent console output is just lost.
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
 }

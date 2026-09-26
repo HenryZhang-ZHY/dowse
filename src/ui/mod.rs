@@ -10,9 +10,12 @@ mod repos_page;
 mod windows;
 mod workspace;
 
+use std::path::{Path, PathBuf};
+
 use gpui_kit::{App, KeyBinding, actions};
 
 use crate::cli::Command;
+use tgrep_gpui::engine::repo;
 
 /// Key context of the main view, which the bindings below are scoped to.
 pub(crate) const CONTEXT: &str = "SearchApp";
@@ -37,8 +40,8 @@ actions!(
     ]
 );
 
-pub fn init(cx: &mut App) {
-    windows::Windows::init(cx);
+pub fn init(config_root: PathBuf, cx: &mut App) {
+    windows::Windows::init(config_root, cx);
     cx.on_window_closed(|cx, _| windows::Windows::closed(cx))
         .detach();
     cx.bind_keys([
@@ -72,7 +75,27 @@ pub fn init(cx: &mut App) {
     });
 }
 
-/// Restore the last session's windows, then carry out `command`.
-pub fn start(command: Command, cx: &mut App) {
+/// Overrides where settings are kept, e.g. for a portable install or tests.
+const CONFIG_DIR_ENV: &str = "TGREP_GPUI_CONFIG_DIR";
+
+/// Where settings are kept.
+pub fn config_root() -> PathBuf {
+    match std::env::var_os(CONFIG_DIR_ENV) {
+        Some(dir) => repo::identity(Path::new(&dir)),
+        None => dirs::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("tgrep-gpui"),
+    }
+}
+
+/// Restore the last session's windows and carry out `command`, then carry
+/// out the commands later launches forward.
+pub fn start(command: Command, forwarded: async_channel::Receiver<Command>, cx: &mut App) {
     windows::Windows::start(command, cx);
+    cx.spawn(async move |cx| {
+        while let Ok(command) = forwarded.recv().await {
+            cx.update(|cx| windows::Windows::forwarded(command, cx));
+        }
+    })
+    .detach();
 }

@@ -70,6 +70,10 @@ The command line follows VS Code's `code`:
 | `tgrep-gpui --add <folder>...` | Adds the folders to the last focused window's workspace. |
 | `tgrep-gpui --remove <folder>...` | Takes them out again. |
 
+As with `code`, only one tgrep-gpui runs at a time: a launch while it is running hands
+its command line to the running app and exits at once, and a launch without arguments
+opens a new window there. Each settings directory (see below) gets its own app.
+
 Settings live under the user configuration directory (`%APPDATA%\tgrep-gpui` on
 Windows, `~/.config/tgrep-gpui` on Linux, `~/Library/Application Support/tgrep-gpui`
 on macOS): `library.json` holds every repository's name and tags, `session.json` the
@@ -88,6 +92,7 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
 | `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's search state, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page. |
 | `src/cli.rs` | The command line. |
+| `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 

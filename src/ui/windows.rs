@@ -14,8 +14,6 @@ use tgrep_gpui::engine::config::ConfigDir;
 use tgrep_gpui::engine::repo;
 use tgrep_gpui::engine::session::{Session, WindowSession};
 
-/// Overrides where settings are kept, e.g. for a portable install or tests.
-const CONFIG_DIR_ENV: &str = "TGREP_GPUI_CONFIG_DIR";
 /// How far each new window is offset from the previous one.
 const CASCADE: f32 = 28.;
 
@@ -71,13 +69,7 @@ impl Global for Windows {}
 impl Windows {
     /// Read the settings (migrating an earlier version's) and create the
     /// shared repository hub.
-    pub(super) fn init(cx: &mut App) {
-        let root = match std::env::var_os(CONFIG_DIR_ENV) {
-            Some(dir) => repo::identity(Path::new(&dir)),
-            None => dirs::config_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("tgrep-gpui"),
-        };
+    pub(super) fn init(root: PathBuf, cx: &mut App) {
         let config = ConfigDir::new(root);
         let mut startup_errors = Vec::new();
         if let Err(error) = config.migrate() {
@@ -125,6 +117,15 @@ impl Windows {
         Self::run(command, cx);
         if cx.global::<Self>().open.is_empty() {
             Self::open_window(Opening::empty(), cx);
+        }
+    }
+
+    /// Carry out a command a later launch forwarded. Launching without
+    /// arguments opens a new window, as `code` does.
+    pub(super) fn forwarded(command: Command, cx: &mut App) {
+        match command {
+            Command::Start => Self::new_window(cx),
+            command => Self::run(command, cx),
         }
     }
 
