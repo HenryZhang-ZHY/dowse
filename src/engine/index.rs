@@ -1,5 +1,5 @@
-//! A searchable folder: where its tgrep index lives, and the set of files a
-//! search reads.
+//! One repository's tgrep index: where it lives, how it is built and
+//! published, and the set of files a search reads.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -13,10 +13,10 @@ use tgrep_core::reader::IndexReader;
 use tgrep_core::visibility::PathVisibility;
 use tgrep_core::walker::{self, WalkOptions};
 
-/// A folder the user searches. The index lives in `<root>/.tgrep`, the same
+/// A searchable folder and its index. The index lives in `<root>/.tgrep`, the same
 /// place `tgrep index` and `tgrep serve` use, so the GUI and the CLI share it.
 #[derive(Clone, Debug)]
-pub struct Workspace {
+pub struct RepoIndex {
     root: PathBuf,
     index_dir: PathBuf,
 }
@@ -33,7 +33,7 @@ pub enum IndexStatus {
     Ready { files: u64, updated_at: SystemTime },
 }
 
-impl Workspace {
+impl RepoIndex {
     pub fn open(root: &Path) -> Result<Self> {
         let root = std::fs::canonicalize(root)
             .with_context(|| format!("cannot open folder {}", root.display()))?;
@@ -156,7 +156,7 @@ impl Workspace {
     }
 }
 
-/// Where [`Workspace::build_index`] writes, inside the index directory so that
+/// Where [`RepoIndex::build_index`] writes, inside the index directory so that
 /// tgrep's walks skip it too.
 const STAGING_DIR: &str = "gui-staging";
 /// tgrep-core reads this file to decide whether an index exists.
@@ -234,7 +234,7 @@ impl Corpus {
         }
     }
 
-    /// Workspace-relative, `/`-separated paths of every file that can match
+    /// Repository-relative, `/`-separated paths of every file that can match
     /// `plan`. Hidden files are left out, as in a default `tgrep` search.
     pub fn candidates(&self, plan: &QueryPlan) -> Vec<String> {
         match &self.source {
@@ -295,9 +295,9 @@ mod tests {
     #[test]
     fn missing_index_falls_back_to_walking() {
         let dir = tree();
-        let workspace = Workspace::open(dir.path()).unwrap();
-        assert_eq!(workspace.index_status(), IndexStatus::Missing);
-        let corpus = workspace.load_corpus();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        assert_eq!(index.index_status(), IndexStatus::Missing);
+        let corpus = index.load_corpus();
         assert!(!corpus.is_indexed());
         assert_eq!(
             corpus.candidates(&QueryPlan::MatchAll),
@@ -308,13 +308,13 @@ mod tests {
     #[test]
     fn built_index_narrows_candidates() {
         let dir = tree();
-        let workspace = Workspace::open(dir.path()).unwrap();
-        workspace.build_index().unwrap().publish().unwrap();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
         assert!(matches!(
-            workspace.index_status(),
+            index.index_status(),
             IndexStatus::Ready { files: 2, .. }
         ));
-        let corpus = workspace.load_corpus();
+        let corpus = index.load_corpus();
         assert!(corpus.is_indexed());
         let plan = query::build_literal_plan("needle_here", false);
         assert_eq!(corpus.candidates(&plan), vec!["src/lib.rs".to_string()]);
@@ -323,28 +323,28 @@ mod tests {
     #[test]
     fn rebuilding_while_the_index_is_open_publishes_after_readers_close() {
         let dir = tree();
-        let workspace = Workspace::open(dir.path()).unwrap();
-        workspace.build_index().unwrap().publish().unwrap();
-        let corpus = workspace.load_corpus();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
         assert!(corpus.is_indexed());
 
         std::fs::write(dir.path().join("src/new.rs"), "fn added_later() {}\n").unwrap();
         // The build must not touch the mapped files of the open index.
-        let staged = workspace.build_index().unwrap();
+        let staged = index.build_index().unwrap();
         let old_plan = query::build_literal_plan("needle_here", false);
         assert_eq!(corpus.candidates(&old_plan), vec!["src/lib.rs".to_string()]);
         drop(corpus);
         staged.publish().unwrap();
 
         assert!(matches!(
-            workspace.index_status(),
+            index.index_status(),
             IndexStatus::Ready { files: 3, .. }
         ));
-        let corpus = workspace.load_corpus();
+        let corpus = index.load_corpus();
         let plan = query::build_literal_plan("added_later", false);
         assert_eq!(corpus.candidates(&plan), vec!["src/new.rs".to_string()]);
         // The staging directory is gone and never indexed itself.
-        assert!(!workspace.index_dir.join(STAGING_DIR).exists());
+        assert!(!index.index_dir.join(STAGING_DIR).exists());
         assert!(
             corpus
                 .candidates(&QueryPlan::MatchAll)

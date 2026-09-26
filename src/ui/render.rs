@@ -2,7 +2,6 @@
 //! facet sidebar, result cards and the status bar.
 
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -20,12 +19,11 @@ use gpui_kit::*;
 
 use super::CONTEXT;
 use super::app::{Page, SearchApp, file_key};
-use super::repos::{IndexActivity, RepoState};
+use super::hub::{IndexActivity, RepoView};
 use crate::format;
 use tgrep_gpui::engine::facets::FacetKind;
 use tgrep_gpui::engine::repo::{self, BRANCH_GROUP};
 use tgrep_gpui::engine::search::{FileMatch, Snippet, SnippetLine};
-use tgrep_gpui::engine::workspace::IndexStatus;
 
 /// Matching lines shown per file before "Show more".
 const COLLAPSED_MATCH_LINES: usize = 6;
@@ -38,7 +36,7 @@ impl Render for SearchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
             Page::Repositories => self.render_repositories_page(cx).into_any_element(),
-            Page::Search if self.repos.is_empty() => self.render_welcome(cx).into_any_element(),
+            Page::Search if self.members.is_empty() => self.render_welcome(cx).into_any_element(),
             Page::Search => v_flex()
                 .flex_1()
                 .min_h_0()
@@ -79,7 +77,7 @@ impl SearchApp {
     fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let searchable = !self.repos.is_empty();
+        let searchable = !self.members.is_empty();
 
         let toggles = h_flex()
             .gap_0p5()
@@ -118,7 +116,7 @@ impl SearchApp {
             .ghost()
             .small()
             .icon(Lucide::FolderGit2)
-            .label(format!("Repositories · {}", self.repos.len()))
+            .label(format!("Repositories · {}", self.members.len()))
             .selected(on_repositories)
             .tooltip("Add, tag and index repositories (Ctrl+,)")
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -204,8 +202,9 @@ impl SearchApp {
             theme.accent_foreground,
             theme.primary,
         );
-        let total = self.repos.len();
-        let in_scope = self.in_scope().count();
+        let repos = self.repo_views(cx);
+        let total = repos.len();
+        let in_scope = self.in_scope(&repos).count();
         let selected: Vec<String> = self.scope.tags().map(str::to_string).collect();
 
         let chips = selected.iter().map(|tag| {
@@ -229,7 +228,7 @@ impl SearchApp {
                 }))
         });
 
-        let catalog = repo::tag_catalog(self.repos.iter().map(|repo| &*repo.info));
+        let catalog = repo::tag_catalog(repos.iter().map(|repo| &*repo.info));
         let app = cx.entity();
         let scope = self.scope.clone();
         let picker = Popover::new("scope-picker")
@@ -498,6 +497,7 @@ impl SearchApp {
             .when(self.searching, |row| row.child(Spinner::new().small()))
             .child(self.summary_text());
 
+        let repos = self.repo_views(cx);
         let content = if let Some(error) = self.query_error.clone() {
             centered_message(
                 cx,
@@ -506,14 +506,14 @@ impl SearchApp {
                 error,
             )
             .into_any_element()
-        } else if self.in_scope().next().is_none() {
+        } else if self.in_scope(&repos).next().is_none() {
             centered_message(
                 cx,
                 Icon::new(Lucide::Tag).text_color(muted),
                 "No repositories in scope",
                 format!(
                     "The selected tags match none of your {}. Change the scope above.",
-                    format::plural(self.repos.len(), "repository", "repositories")
+                    format::plural(repos.len(), "repository", "repositories")
                 ),
             )
             .into_any_element()
@@ -866,7 +866,7 @@ impl SearchApp {
     fn render_tips(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let in_scope = self.in_scope().count();
+        let in_scope = self.in_scope(&self.repo_views(cx)).count();
         let tip = |key: &'static str, text: &'static str| {
             h_flex()
                 .gap_3()
@@ -956,31 +956,28 @@ impl SearchApp {
             .bg(theme.status_bar)
             .text_xs()
             .text_color(muted);
-        if self.repos.is_empty() {
+        let repos = self.repo_views(cx);
+        if repos.is_empty() {
             return bar.child("No repositories yet");
         }
 
-        let in_scope: Vec<&RepoState> = self.in_scope().collect();
-        let building = self
-            .repos
+        let in_scope: Vec<&RepoView> = self.in_scope(&repos).collect();
+        let building = repos
             .iter()
-            .find(|repo| repo.index == IndexActivity::Building);
-        let queued = self
-            .repos
+            .find(|repo| repo.activity == IndexActivity::Building);
+        let queued = repos
             .iter()
-            .filter(|repo| repo.index == IndexActivity::Queued)
+            .filter(|repo| repo.activity == IndexActivity::Queued)
             .count();
-        let loading = self
-            .repos
+        let loading = repos
             .iter()
-            .filter(|repo| repo.index == IndexActivity::Loading)
+            .filter(|repo| repo.activity == IndexActivity::Loading)
             .count();
-        let failed = self
-            .repos
+        let failed = repos
             .iter()
             .filter(|repo| {
                 matches!(
-                    repo.index,
+                    repo.activity,
                     IndexActivity::Failed(_) | IndexActivity::Missing
                 )
             })
@@ -1004,7 +1001,7 @@ impl SearchApp {
 
         bar.child(format!(
             "{} · {} in scope",
-            format::plural(self.repos.len(), "repository", "repositories"),
+            format::plural(repos.len(), "repository", "repositories"),
             in_scope.len()
         ))
         .child(div().flex_1())
@@ -1047,29 +1044,6 @@ impl SearchApp {
                 .disabled(in_scope.is_empty())
                 .on_click(cx.listener(|this, _, _, cx| this.queue_scope_indexes(cx))),
         )
-    }
-}
-
-/// One-line description of a repository's index, for the status bar and the
-/// repositories page.
-pub(super) fn index_summary(repo: &RepoState) -> String {
-    let changed = match repo.changed_files {
-        0 => String::new(),
-        n => format!(" · {} changed", format::plural(n, "file", "files")),
-    };
-    match &repo.index {
-        IndexActivity::Loading => "Loading index…".into(),
-        IndexActivity::Queued => "Waiting to index…".into(),
-        IndexActivity::Building => "Indexing…".into(),
-        IndexActivity::Missing => "Folder not found".into(),
-        IndexActivity::Failed(error) => format!("Indexing failed: {error}"),
-        IndexActivity::Idle(IndexStatus::Missing) => "No index yet".into(),
-        IndexActivity::Idle(IndexStatus::Unusable) => "Index unusable, scanning files".into(),
-        IndexActivity::Idle(IndexStatus::Ready { files, updated_at }) => format!(
-            "{} indexed · updated {}{changed}",
-            format::plural(*files as usize, "file", "files"),
-            format::ago(*updated_at, SystemTime::now())
-        ),
     }
 }
 

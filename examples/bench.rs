@@ -4,10 +4,10 @@
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
+use tgrep_gpui::engine::index::{IndexStatus, RepoIndex};
 use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
 use tgrep_gpui::engine::repo::RepoInfo;
 use tgrep_gpui::engine::search::{self, SearchLimits, SearchSource};
-use tgrep_gpui::engine::workspace::{IndexStatus, Workspace};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -19,14 +19,14 @@ fn main() -> anyhow::Result<()> {
             .to_vec();
     }
 
-    let workspace = Workspace::open(folder.as_ref())?;
-    if !matches!(workspace.index_status(), IndexStatus::Ready { .. }) {
+    let index = RepoIndex::open(folder.as_ref())?;
+    if !matches!(index.index_status(), IndexStatus::Ready { .. }) {
         let started = Instant::now();
-        workspace.build_index()?.publish()?;
+        index.build_index()?.publish()?;
         println!("index built in {:.2?}", started.elapsed());
     }
     let started = Instant::now();
-    let corpus = std::sync::Arc::new(workspace.load_corpus());
+    let corpus = std::sync::Arc::new(index.load_corpus());
     println!(
         "corpus loaded in {:.2?}: {} files, indexed: {}",
         started.elapsed(),
@@ -37,8 +37,8 @@ fn main() -> anyhow::Result<()> {
     let source = SearchSource {
         repo: std::sync::Arc::new(RepoInfo {
             id: folder.clone(),
-            name: workspace.name(),
-            root: workspace.root().to_path_buf(),
+            name: index.name(),
+            root: index.root().to_path_buf(),
             branch: None,
             tags: vec![],
         }),

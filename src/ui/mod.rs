@@ -2,6 +2,7 @@
 //! results) and a repositories page for adding and tagging repositories.
 
 mod app;
+mod hub;
 mod render;
 mod repos;
 mod repos_page;
@@ -30,6 +31,7 @@ actions!(
 );
 
 pub fn init(cx: &mut App) {
+    hub::RepoHub::init(cx);
     cx.bind_keys([
         KeyBinding::new("secondary-o", AddRepository, Some(CONTEXT)),
         KeyBinding::new("secondary-,", ShowRepositories, Some(CONTEXT)),

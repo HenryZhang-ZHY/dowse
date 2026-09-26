@@ -33,7 +33,7 @@ struct State {
 pub struct ChangeMark(u64);
 
 impl ChangeTracker {
-    /// Watch `root`, which must be canonical (as [`super::workspace::Workspace`] keeps it).
+    /// Watch `root`, which must be canonical (as [`super::index::RepoIndex`] keeps it).
     pub fn start(root: &Path) -> notify::Result<Self> {
         let state = Arc::new(State {
             root: root.to_path_buf(),
@@ -58,7 +58,7 @@ impl ChangeTracker {
         })
     }
 
-    /// Workspace-relative paths changed since the last completed index build.
+    /// Repository-relative paths changed since the last completed index build.
     pub fn changed_paths(&self) -> Vec<String> {
         self.state.changed.lock().unwrap().keys().cloned().collect()
     }
@@ -117,7 +117,7 @@ impl State {
         }
     }
 
-    /// The workspace-relative path of a file a default search would read, or
+    /// The repository-relative path of a file a default search would read, or
     /// `None` for hidden, ignored and binary files.
     fn accept(&self, path: &Path) -> Option<String> {
         let relative = relative_path(&self.root, path)?;

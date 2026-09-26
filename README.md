@@ -65,8 +65,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine, a library with no UI dependency. `workspace.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `registry.rs` saves the repository list; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. |
-| `src/ui/` | The GPUI view: `app.rs` holds the search state, `repos.rs` the repositories and their indexes, `render.rs` the search page and `repos_page.rs` the repositories page. |
+| `src/engine/` | The search engine, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `registry.rs` saves the repository list; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. |
+| `src/ui/` | The GPUI views: `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue), `app.rs` a window's search state, `repos.rs` the repositories a window uses and its scope, `render.rs` the search page and `repos_page.rs` the repositories page. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 

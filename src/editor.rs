@@ -30,7 +30,7 @@ const KNOWN_EDITORS: &[(&str, &[&str])] = &[
 ];
 
 pub fn resolve(file: &Path, line: usize) -> Launch {
-    let file = tgrep_gpui::engine::workspace::display_path(file);
+    let file = tgrep_gpui::engine::index::display_path(file);
     if let Ok(template) = std::env::var(EDITOR_ENV)
         && let Some(launch) = from_template(&template, &file, line)
     {

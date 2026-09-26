@@ -13,8 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::app::SearchApp;
-use super::render::index_summary;
-use super::repos::{IndexActivity, RepoState};
+use super::hub::{IndexActivity, RepoView};
 
 impl SearchApp {
     pub(super) fn render_repositories_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -49,7 +48,7 @@ impl SearchApp {
             );
 
         let rows: Vec<AnyElement> = self
-            .repos
+            .repo_views(cx)
             .iter()
             .map(|repo| self.render_repository_row(repo, cx).into_any_element())
             .collect();
@@ -90,13 +89,13 @@ impl SearchApp {
             .overflow_y_scrollbar()
     }
 
-    fn render_repository_row(&self, repo: &RepoState, cx: &Context<Self>) -> impl IntoElement {
+    fn render_repository_row(&self, repo: &RepoView, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (muted, border, danger) = (theme.muted_foreground, theme.border, theme.danger);
         let radius = theme.radius_lg;
         let id = repo.info.id.clone();
         let problem = matches!(
-            repo.index,
+            repo.activity,
             IndexActivity::Failed(_) | IndexActivity::Missing
         );
         let (rebuild_id, remove_id) = (id.clone(), id.clone());
@@ -131,7 +130,7 @@ impl SearchApp {
                             .truncate()
                             .text_xs()
                             .text_color(if problem { danger } else { muted })
-                            .child(index_summary(repo)),
+                            .child(repo.index_summary()),
                     )
                     .child(
                         Button::new(SharedString::from(format!("rebuild:{id}")))
@@ -139,7 +138,7 @@ impl SearchApp {
                             .xsmall()
                             .icon(Lucide::RefreshCw)
                             .tooltip("Rebuild this index")
-                            .disabled(repo.is_busy() || repo.index == IndexActivity::Missing)
+                            .disabled(repo.is_busy() || repo.activity == IndexActivity::Missing)
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {
                                     this.queue_index(&rebuild_id, cx)
@@ -164,10 +163,12 @@ impl SearchApp {
                     .truncate()
                     .child(id.clone()),
             )
-            .child(
-                Input::new(&repo.tags_input)
-                    .small()
-                    .prefix(Icon::new(Lucide::Tag).small().text_color(muted)),
-            )
+            .when_some(self.tag_inputs.get(&id), |row, tags| {
+                row.child(
+                    Input::new(&tags.input)
+                        .small()
+                        .prefix(Icon::new(Lucide::Tag).small().text_color(muted)),
+                )
+            })
     }
 }

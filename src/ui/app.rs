@@ -13,7 +13,8 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
-use super::repos::RepoState;
+use super::hub::RepoHub;
+use super::repos::TagInputs;
 use super::{
     AddRepository, FocusPathFilter, FocusSearch, RebuildIndex, ShowRepositories,
     ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
@@ -21,7 +22,6 @@ use super::{
 use crate::editor::{self, Launch};
 use tgrep_gpui::engine::facets::{FacetFilter, FacetKind, Facets};
 use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
-use tgrep_gpui::engine::registry::Registry;
 use tgrep_gpui::engine::repo::Scope;
 use tgrep_gpui::engine::search::{self, FileMatch, SearchLimits, SearchOutcome};
 
@@ -36,11 +36,10 @@ pub(super) enum Page {
 
 pub struct SearchApp {
     pub(super) page: Page,
-    pub(super) registry: Registry,
-    /// Set when the saved registry could not be read, so it is never overwritten.
-    pub(super) registry_locked: bool,
-    /// Sorted by name.
-    pub(super) repos: Vec<RepoState>,
+    pub(super) hub: Entity<RepoHub>,
+    /// Ids of the repositories this window uses, each acquired from the hub.
+    pub(super) members: Vec<String>,
+    pub(super) tag_inputs: TagInputs,
     pub(super) scope: Scope,
     pub(super) search_input: Entity<InputState>,
     pub(super) path_input: Entity<InputState>,
@@ -57,7 +56,6 @@ pub struct SearchApp {
     pub(super) list_state: ListState,
     pub(super) search_task: Option<Task<()>>,
     pub(super) search_cancel: Arc<AtomicBool>,
-    _poll_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -88,17 +86,22 @@ impl SearchApp {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search code…"));
         let path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter paths: src *.rs !test"));
+        let hub = RepoHub::global(cx);
         let subscriptions = vec![
             cx.subscribe_in(&search_input, window, Self::on_input_event),
             cx.subscribe_in(&path_input, window, Self::on_input_event),
+            cx.subscribe_in(&hub, window, Self::on_hub_event),
+            cx.observe(&hub, |_, _, cx| cx.notify()),
         ];
+        cx.on_release(|this, cx| this.release_repositories(cx))
+            .detach();
         search_input.update(cx, |input, cx| input.focus(window, cx));
 
         let this = Self {
             page: Page::Search,
-            registry: Registry::default(),
-            registry_locked: false,
-            repos: Vec::new(),
+            hub,
+            members: Vec::new(),
+            tag_inputs: TagInputs::default(),
             scope: Scope::default(),
             search_input,
             path_input,
@@ -113,12 +116,11 @@ impl SearchApp {
             list_state: ListState::new(0, ListAlignment::Top, px(800.)),
             search_task: None,
             search_cancel: Arc::new(AtomicBool::new(false)),
-            _poll_task: Self::poll_repositories(cx),
             _subscriptions: subscriptions,
         };
         // After construction, once the window's `Root` exists to show notifications.
         cx.defer_in(window, move |this, window, cx| {
-            this.restore_registry(window, cx);
+            this.restore_repositories(window, cx);
             if !folders.is_empty() {
                 this.add_repositories(folders, window, cx);
             }
@@ -184,7 +186,7 @@ impl SearchApp {
             }
         };
         self.query_error = None;
-        let (sources, waiting) = self.search_sources();
+        let (sources, waiting) = self.search_sources(cx);
         // Repositories still loading trigger another search when they finish.
         self.searching = true;
         if sources.is_empty() && waiting {

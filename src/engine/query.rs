@@ -65,7 +65,7 @@ impl CompiledQuery {
     }
 }
 
-/// Filters files by their workspace-relative path.
+/// Filters files by their repository-relative path.
 ///
 /// The filter is a list of space-separated terms:
 ///

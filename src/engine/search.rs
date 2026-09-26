@@ -11,10 +11,10 @@ use rayon::prelude::*;
 use regex::Regex;
 use tgrep_core::encoding::{self, EncodingMode};
 
+use super::index::Corpus;
 use super::language;
 use super::query::CompiledQuery;
 use super::repo::RepoInfo;
-use super::workspace::Corpus;
 
 /// Files searched in parallel between checks of the result limit.
 const SEARCH_CHUNK: usize = 512;
@@ -421,8 +421,8 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 #[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
+    use crate::engine::index::RepoIndex;
     use crate::engine::query::SearchQuery;
-    use crate::engine::workspace::Workspace;
 
     fn limits() -> SearchLimits {
         SearchLimits::default()
@@ -444,9 +444,9 @@ mod tests {
 
     /// Index `root` and wrap it as a search source.
     fn indexed_source(name: &str, root: &std::path::Path) -> SearchSource {
-        let workspace = Workspace::open(root).unwrap();
-        workspace.build_index().unwrap().publish().unwrap();
-        let corpus = workspace.load_corpus();
+        let index = RepoIndex::open(root).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
         assert!(corpus.is_indexed());
         SearchSource {
             repo: repo_at(name, root),
