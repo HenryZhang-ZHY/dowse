@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 globset = "0.4"
-gpui-kit = "0.6.6"
+gpui-kit = { version = "0.6.6", features = ["tree-sitter-languages"] }
 memchr = "2"
 notify = "7"
 serde = { version = "1", features = ["derive"] }

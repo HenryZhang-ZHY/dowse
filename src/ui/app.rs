@@ -2,8 +2,9 @@
 //! repositories in scope, and facet filtering of the results. Repository
 //! management lives in `repos.rs`; rendering in `render.rs` and `repos_page.rs`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -13,6 +14,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
+use super::highlight::{self, Highlighters, LineStyles};
 use super::hub::RepoHub;
 use super::repos::TagInputs;
 use super::windows::{Opening, Windows};
@@ -62,6 +64,7 @@ pub struct SearchApp {
     pub(super) list_state: ListState,
     pub(super) search_task: Option<Task<()>>,
     pub(super) search_cancel: Arc<AtomicBool>,
+    pub(super) highlighters: Highlighters,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -71,7 +74,13 @@ pub(super) struct Results {
     pub(super) facets: Facets,
     /// Indexes into `outcome.files` that pass the facet filters.
     pub(super) visible: Vec<usize>,
+    /// Syntax styles of each file's snippets, by index into `outcome.files`,
+    /// computed as files are first shown.
+    pub(super) syntax: HashMap<usize, Rc<SnippetSyntax>>,
 }
+
+/// Styles for every line of every snippet of a file.
+pub(super) type SnippetSyntax = Vec<Vec<LineStyles>>;
 
 impl Results {
     pub(super) fn file(&self, visible_index: usize) -> Option<&FileMatch> {
@@ -97,6 +106,7 @@ impl SearchApp {
             cx.subscribe_in(&path_input, window, Self::on_input_event),
             cx.subscribe_in(&hub, window, Self::on_hub_event),
             cx.observe(&hub, |_, _, cx| cx.notify()),
+            cx.observe_global::<Theme>(|this, cx| this.theme_changed(cx)),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     Windows::activated(window.window_handle(), cx);
@@ -134,6 +144,7 @@ impl SearchApp {
             list_state: ListState::new(0, ListAlignment::Top, px(800.)),
             search_task: None,
             search_cancel: Arc::new(AtomicBool::new(false)),
+            highlighters: Highlighters::default(),
             _subscriptions: subscriptions,
         };
         // Load the workspace now, so requests right after opening (such as
@@ -253,6 +264,7 @@ impl SearchApp {
             outcome: Arc::new(outcome),
             facets: Facets::default(),
             visible: Vec::new(),
+            syntax: HashMap::new(),
         });
         self.refresh_visible(cx);
     }
@@ -271,6 +283,42 @@ impl SearchApp {
             None => 0,
         };
         self.list_state.reset(count);
+        cx.notify();
+    }
+
+    /// Syntax styles for the snippets of the file shown at `visible_index`,
+    /// or `None` when its language has no grammar.
+    pub(super) fn snippet_syntax(
+        &mut self,
+        visible_index: usize,
+        cx: &App,
+    ) -> Option<Rc<SnippetSyntax>> {
+        let results = self.results.as_mut()?;
+        let index = *results.visible.get(visible_index)?;
+        if let Some(syntax) = results.syntax.get(&index) {
+            return Some(syntax.clone());
+        }
+        let file = &results.outcome.files[index];
+        let grammar = highlight::grammar(file.language?)?;
+        let theme = &cx.theme().highlight_theme;
+        let syntax: SnippetSyntax = file
+            .snippets
+            .iter()
+            .map(|snippet| {
+                let lines: Vec<&str> = snippet.lines.iter().map(|line| line.text.as_str()).collect();
+                self.highlighters.highlight(grammar, &lines, theme)
+            })
+            .collect();
+        let syntax = Rc::new(syntax);
+        results.syntax.insert(index, syntax.clone());
+        Some(syntax)
+    }
+
+    /// Syntax colours follow the theme.
+    fn theme_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(results) = self.results.as_mut() {
+            results.syntax.clear();
+        }
         cx.notify();
     }
 

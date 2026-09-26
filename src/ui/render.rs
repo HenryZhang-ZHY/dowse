@@ -20,6 +20,7 @@ use gpui_kit::*;
 
 use super::CONTEXT;
 use super::app::{Page, SearchApp, file_key};
+use super::highlight::LineStyles;
 use super::hub::{IndexActivity, RepoView};
 use super::windows::Windows;
 use crate::format;
@@ -822,6 +823,7 @@ impl SearchApp {
         };
 
         let (shown, hidden_lines) = visible_snippets(&file, expanded);
+        let syntax = self.snippet_syntax(visible_index, cx);
         let mut body = v_flex()
             .py_1()
             .font_family(mono_family)
@@ -830,8 +832,10 @@ impl SearchApp {
             if index > 0 {
                 body = body.child(div().h_px().mx_3().my_1().bg(border));
             }
-            for line in &snippet.lines {
-                body = body.child(self.render_line(&file, &key, line, cx));
+            let snippet_syntax = syntax.as_ref().and_then(|syntax| syntax.get(index));
+            for (line_index, line) in snippet.lines.iter().enumerate() {
+                let line_syntax = snippet_syntax.and_then(|styles| styles.get(line_index));
+                body = body.child(self.render_line(&file, &key, line, line_syntax, cx));
             }
         }
 
@@ -894,28 +898,11 @@ impl SearchApp {
         file: &FileMatch,
         key: &str,
         line: &SnippetLine,
+        syntax: Option<&LineStyles>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let highlight = HighlightStyle {
-            background_color: Some(
-                theme
-                    .yellow
-                    .opacity(if theme.is_dark() { 0.4 } else { 0.55 }),
-            ),
-            font_weight: Some(FontWeight::SEMIBOLD),
-            ..Default::default()
-        };
-        let text: SharedString = if line.text.is_empty() {
-            " ".into()
-        } else {
-            line.text.clone().into()
-        };
-        let styled = StyledText::new(text).with_highlights(
-            line.highlights
-                .iter()
-                .map(|range| (range.clone(), highlight)),
-        );
+        let styled = code_text(&line.text, syntax, &line.highlights, cx);
         let (hover, muted) = (theme.list_hover, theme.muted_foreground);
         let number = line.number;
         let (root, path) = (file.repo.root.clone(), file.path.clone());
@@ -940,7 +927,7 @@ impl SearchApp {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .pr_3()
-                    .when(!line.is_match, |text| text.text_color(muted))
+                    .when(!line.is_match, |text| text.text_color(muted).opacity(0.8))
                     .child(styled),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1217,6 +1204,38 @@ fn full_display_path(root: &std::path::Path, path: &str) -> String {
     root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR))
         .to_string_lossy()
         .into_owned()
+}
+
+/// How search matches stand out over the syntax colours.
+pub(super) fn match_style(cx: &App) -> HighlightStyle {
+    let theme = cx.theme();
+    HighlightStyle {
+        background_color: Some(
+            theme
+                .yellow
+                .opacity(if theme.is_dark() { 0.4 } else { 0.55 }),
+        ),
+        font_weight: Some(FontWeight::SEMIBOLD),
+        ..Default::default()
+    }
+}
+
+/// A line of code with its syntax colours and search matches.
+pub(super) fn code_text(
+    text: &str,
+    syntax: Option<&LineStyles>,
+    matches: &[std::ops::Range<usize>],
+    cx: &App,
+) -> StyledText {
+    if text.is_empty() {
+        return StyledText::new(" ");
+    }
+    let highlight = match_style(cx);
+    let highlights = combine_highlights(
+        syntax.into_iter().flatten().cloned(),
+        matches.iter().map(|range| (range.clone(), highlight)),
+    );
+    StyledText::new(SharedString::from(text.to_string())).with_highlights(highlights)
 }
 
 /// An icon toggle inside the search input.

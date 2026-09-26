@@ -3,6 +3,7 @@
 //! and tagging the workspace's repositories.
 
 mod app;
+mod highlight;
 mod hub;
 mod render;
 mod repos;
