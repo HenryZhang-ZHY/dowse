@@ -1,4 +1,4 @@
-//! Repositories shared by every window: their saved list and tags, their
+//! Repositories shared by every window: the library of names and tags, their
 //! indexes and change trackers, and the build queue.
 //!
 //! A repository is opened when the first window starts using it and closed
@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime};
 use gpui_kit::*;
 
 use crate::format;
-use tgrep_gpui::engine::index::{Corpus, IndexStatus, RepoIndex, display_path};
-use tgrep_gpui::engine::registry::{Registry, RepoEntry};
+use tgrep_gpui::engine::index::{Corpus, IndexStatus, RepoIndex};
+use tgrep_gpui::engine::library::{Library, LibraryEntry};
 use tgrep_gpui::engine::repo::{self, RepoInfo};
 use tgrep_gpui::engine::search::SearchSource;
 use tgrep_gpui::engine::watch::ChangeTracker;
@@ -25,24 +25,11 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// than re-indexing, so the index is rebuilt in the background.
 const AUTO_REINDEX_CHANGES: usize = 2_000;
 
-/// Overrides where settings are kept, e.g. for a portable install or tests.
-const CONFIG_DIR_ENV: &str = "TGREP_GPUI_CONFIG_DIR";
-
-/// Where the repository list is saved.
-fn registry_file() -> Option<PathBuf> {
-    let dir = match std::env::var_os(CONFIG_DIR_ENV) {
-        Some(dir) => PathBuf::from(dir),
-        None => dirs::config_dir()?.join("tgrep-gpui"),
-    };
-    Some(dir.join("repos.json"))
-}
-
 pub(super) struct RepoHub {
-    registry: Registry,
-    /// Set when the saved registry could not be read, so it is never overwritten.
-    registry_locked: bool,
-    /// Why the registry could not be read, for the first window to show.
-    load_error: Option<String>,
+    library: Library,
+    library_file: PathBuf,
+    /// Set when the library could not be read, so it is never overwritten.
+    library_locked: bool,
     /// Repositories some window uses, by id.
     open: HashMap<String, RepoState>,
     /// Repositories whose builds go first: those the focused window searches.
@@ -142,99 +129,69 @@ impl RepoView {
 }
 
 impl RepoHub {
-    /// Create the hub every window shares.
-    pub(super) fn init(cx: &mut App) {
-        let hub = cx.new(Self::new);
+    /// Create the hub every window shares, over the library in
+    /// `library_file`. Returns why the library could not be read, if so.
+    pub(super) fn init(library_file: PathBuf, cx: &mut App) -> Option<String> {
+        let (library, error) = match Library::load(&library_file) {
+            Ok(library) => (library, None),
+            Err(error) => (
+                Library::default(),
+                Some(format!(
+                    "{error:#}. Tags will not be saved until it is fixed."
+                )),
+            ),
+        };
+        let hub = cx.new(|cx| Self {
+            library,
+            library_file,
+            library_locked: error.is_some(),
+            open: HashMap::new(),
+            preferred: HashSet::new(),
+            _poll_task: Self::poll(cx),
+        });
         cx.set_global(GlobalHub(hub));
+        error
     }
 
     pub(super) fn global(cx: &App) -> Entity<Self> {
         cx.global::<GlobalHub>().0.clone()
     }
 
-    fn new(cx: &mut Context<Self>) -> Self {
-        let loaded = registry_file()
-            .ok_or_else(|| anyhow::anyhow!("no configuration directory"))
-            .and_then(|file| Registry::load(&file));
-        let (registry, load_error) = match loaded {
-            Ok(registry) => (registry, None),
-            Err(error) => (
-                Registry::default(),
-                Some(format!(
-                    "{error:#}. Repository changes will not be saved until it is fixed."
-                )),
-            ),
-        };
-        Self {
-            registry,
-            registry_locked: load_error.is_some(),
-            load_error,
-            open: HashMap::new(),
-            preferred: HashSet::new(),
-            _poll_task: Self::poll(cx),
-        }
-    }
+    // ----- the library ----------------------------------------------------------
 
-    /// Why the saved repositories could not be read, once.
-    pub(super) fn take_load_error(&mut self) -> Option<String> {
-        self.load_error.take()
-    }
-
-    // ----- the saved list -------------------------------------------------------
-
-    /// Every registered repository, in the order saved.
-    pub(super) fn registered(&self) -> Vec<String> {
-        self.registry
-            .repos
-            .iter()
-            .map(|entry| entry.path.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    pub(super) fn saved_scope(&self) -> &[String] {
-        &self.registry.scope
-    }
-
-    pub(super) fn save_scope(&mut self, scope: Vec<String>) -> anyhow::Result<()> {
-        if self.registry.scope == scope {
-            return Ok(());
-        }
-        self.registry.scope = scope;
-        self.save()
-    }
-
-    /// Register every repository found at `paths` (see [`repo::discover`])
-    /// that is not registered yet. Returns the ids of all of them, new or not.
+    /// The repositories at `paths`, known to the library from now on. With
+    /// `discover`, a folder holding git repositories stands for them (see
+    /// [`repo::discover`]); otherwise each path is one repository. Folders
+    /// that do not exist are skipped when discovering. Returns their ids
+    /// without duplicates.
     pub(super) fn register(
         &mut self,
         paths: &[PathBuf],
-        cx: &mut Context<Self>,
+        discover: bool,
     ) -> anyhow::Result<Vec<String>> {
+        let folders: Vec<PathBuf> = if discover {
+            paths
+                .iter()
+                .filter(|path| path.is_dir())
+                .flat_map(|path| repo::discover(path))
+                .collect()
+        } else {
+            paths.to_vec()
+        };
         let mut ids = Vec::new();
         let mut added = false;
-        for path in paths.iter().flat_map(|path| repo::discover(path)) {
-            let Ok(canonical) = std::fs::canonicalize(&path) else {
-                continue;
-            };
-            let path = PathBuf::from(display_path(&canonical));
-            added |= self.registry.add(path.clone(), Vec::new());
+        for folder in folders {
+            let path = repo::identity(&folder);
+            added |= self.library.ensure(&path);
             let id = path.to_string_lossy().into_owned();
             if !ids.contains(&id) {
                 ids.push(id);
             }
         }
         if added {
-            cx.notify();
             self.save()?;
         }
         Ok(ids)
-    }
-
-    /// Unregister a repository. Windows still using it keep it open.
-    pub(super) fn unregister(&mut self, id: &str, cx: &mut Context<Self>) -> anyhow::Result<()> {
-        self.registry.remove(Path::new(id));
-        cx.notify();
-        self.save()
     }
 
     pub(super) fn set_tags(
@@ -252,35 +209,33 @@ impl RepoHub {
         let mut info = (*state.info).clone();
         info.tags = tags.clone();
         state.info = Arc::new(info);
-        self.registry.set_tags(Path::new(id), tags);
+        self.library.set_tags(Path::new(id), tags);
         cx.emit(HubEvent::MetadataChanged);
         cx.notify();
         self.save()
     }
 
     fn save(&self) -> anyhow::Result<()> {
-        if self.registry_locked {
+        if self.library_locked {
             return Ok(());
         }
-        let file = registry_file().ok_or_else(|| anyhow::anyhow!("no configuration directory"))?;
-        self.registry.save(&file)
+        self.library.save(&self.library_file)
     }
 
     // ----- opening and closing --------------------------------------------------
 
-    /// Start using a registered repository, opening it for the first user.
+    /// Start using a repository, opening it for the first user. Ids come from
+    /// [`Self::register`].
     pub(super) fn acquire(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(state) = self.open.get_mut(id) {
             state.users += 1;
             return;
         }
-        let Some(entry) = self
-            .registry
-            .repos
-            .iter()
-            .find(|entry| entry.path.to_string_lossy() == id)
-            .cloned()
-        else {
+        let path = Path::new(id);
+        if self.library.ensure(path) {
+            self.save().ok();
+        }
+        let Some(entry) = self.library.get(path).cloned() else {
             return;
         };
         let mut state = RepoState::open(&entry);
@@ -565,7 +520,7 @@ impl RepoHub {
 }
 
 impl RepoState {
-    fn open(entry: &RepoEntry) -> Self {
+    fn open(entry: &LibraryEntry) -> Self {
         let index = RepoIndex::open(&entry.path).ok();
         let tracker = index
             .as_ref()

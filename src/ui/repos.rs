@@ -14,6 +14,7 @@ use gpui_kit::*;
 
 use super::app::SearchApp;
 use super::hub::{HubEvent, RepoHub, RepoView};
+use super::windows::Windows;
 use tgrep_gpui::engine::repo::{self, RepoInfo};
 use tgrep_gpui::engine::search::SearchSource;
 
@@ -26,35 +27,27 @@ pub(super) struct TagInput {
 impl SearchApp {
     // ----- membership ----------------------------------------------------------
 
-    /// Start using the saved repositories and scope.
-    pub(super) fn restore_repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (ids, scope, error) = self.hub.update(cx, |hub, _| {
-            (
-                hub.registered(),
-                hub.saved_scope().to_vec(),
-                hub.take_load_error(),
-            )
-        });
-        if let Some(error) = error {
-            window.push_notification(Notification::error(error), cx);
+    /// Use exactly the repositories `ids`, in that order: acquire the new ones
+    /// before releasing the old, so repositories in both stay open.
+    pub(super) fn set_members(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let mut members: Vec<String> = Vec::new();
+        for id in ids {
+            if !members.contains(&id) {
+                members.push(id);
+            }
         }
-        self.scope = repo::Scope::new(scope);
-        self.use_repositories(ids, cx);
-        self.sync_tag_inputs(window, cx);
-    }
-
-    fn use_repositories(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
-        let new: Vec<String> = ids
-            .into_iter()
-            .filter(|id| !self.members.contains(id))
-            .collect();
+        let old = std::mem::replace(&mut self.members, members);
+        let members = self.members.clone();
         self.hub.update(cx, |hub, cx| {
-            for id in &new {
+            for id in members.iter().filter(|id| !old.contains(id)) {
                 hub.acquire(id, cx);
             }
+            for id in old.iter().filter(|id| !members.contains(id)) {
+                hub.release(id, cx);
+            }
         });
-        self.members.extend(new);
         self.prefer_scope(cx);
+        cx.notify();
     }
 
     /// Add every repository found at `paths` (see [`repo::discover`]).
@@ -64,7 +57,7 @@ impl SearchApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let registered = self.hub.update(cx, |hub, cx| hub.register(&paths, cx));
+        let registered = self.hub.update(cx, |hub, _| hub.register(&paths, true));
         let ids = match registered {
             Ok(ids) => ids,
             Err(error) => {
@@ -80,17 +73,19 @@ impl SearchApp {
             .filter(|id| !self.members.contains(id))
             .collect();
         if added.is_empty() {
-            window.push_notification("Those repositories are already added.", cx);
+            window.push_notification("Those repositories are already in this workspace.", cx);
             return;
         }
         let message = match added.as_slice() {
             [one] => format!("Added {one}"),
             many => format!("Added {} repositories", many.len()),
         };
-        self.use_repositories(added, cx);
+        let mut members = self.members.clone();
+        members.extend(added);
+        self.set_members(members, cx);
         self.sync_tag_inputs(window, cx);
+        self.persist_members(window, cx);
         window.push_notification(message, cx);
-        cx.notify();
     }
 
     pub(super) fn prompt_for_repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -112,27 +107,64 @@ impl SearchApp {
         .detach();
     }
 
+    /// Take a repository out of this workspace. Its index and tags are kept.
     pub(super) fn remove_repository(
         &mut self,
         id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.members.iter().any(|member| member == id) {
-            return;
-        }
-        self.members.retain(|member| member != id);
-        self.tag_inputs.remove(id);
-        let saved = self.hub.update(cx, |hub, cx| {
-            hub.release(id, cx);
-            hub.unregister(id, cx)
-        });
-        if let Err(error) = saved {
-            window.push_notification(
-                Notification::error(format!("Could not save repositories: {error:#}")),
-                cx,
+        self.remove_ids(&[id.to_string()], window, cx);
+    }
+
+    /// Take the repositories at `paths` out of this workspace: each folder,
+    /// and the repositories directly inside it.
+    pub(super) fn remove_folders(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut ids: Vec<String> = Vec::new();
+        for path in paths {
+            let mut folders = vec![path.clone()];
+            if path.is_dir() {
+                folders.extend(repo::discover(path));
+            }
+            ids.extend(
+                folders
+                    .iter()
+                    .map(|folder| repo::identity(folder).to_string_lossy().into_owned()),
             );
         }
+        let removed = ids.iter().filter(|id| self.members.contains(id)).count();
+        if removed == 0 {
+            window.push_notification("Those repositories are not in this workspace.", cx);
+            return;
+        }
+        self.remove_ids(&ids, window, cx);
+        window.push_notification(
+            format!(
+                "Removed {}",
+                crate::format::plural(removed, "repository", "repositories")
+            ),
+            cx,
+        );
+    }
+
+    fn remove_ids(&mut self, ids: &[String], window: &mut Window, cx: &mut Context<Self>) {
+        let members: Vec<String> = self
+            .members
+            .iter()
+            .filter(|member| !ids.contains(member))
+            .cloned()
+            .collect();
+        if members.len() == self.members.len() {
+            return;
+        }
+        self.set_members(members, cx);
+        self.sync_tag_inputs(window, cx);
+        self.persist_members(window, cx);
         self.schedule_search(false, cx);
     }
 
@@ -292,30 +324,18 @@ impl SearchApp {
 
     // ----- scope -----------------------------------------------------------------
 
-    pub(super) fn toggle_scope_tag(
-        &mut self,
-        tag: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn toggle_scope_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
         self.scope.toggle(tag);
-        self.scope_changed(window, cx);
+        self.scope_changed(cx);
     }
 
-    pub(super) fn clear_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn clear_scope(&mut self, cx: &mut Context<Self>) {
         self.scope.clear();
-        self.scope_changed(window, cx);
+        self.scope_changed(cx);
     }
 
-    fn scope_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tags = self.scope.tags().map(str::to_string).collect();
-        let saved = self.hub.update(cx, |hub, _| hub.save_scope(tags));
-        if let Err(error) = saved {
-            window.push_notification(
-                Notification::error(format!("Could not save repositories: {error:#}")),
-                cx,
-            );
-        }
+    fn scope_changed(&mut self, cx: &mut Context<Self>) {
+        Windows::save(cx);
         self.prefer_scope(cx);
         self.schedule_search(false, cx);
     }

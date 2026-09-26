@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
@@ -20,10 +21,12 @@ use gpui_kit::*;
 use super::CONTEXT;
 use super::app::{Page, SearchApp, file_key};
 use super::hub::{IndexActivity, RepoView};
+use super::windows::Windows;
 use crate::format;
 use tgrep_gpui::engine::facets::FacetKind;
 use tgrep_gpui::engine::repo::{self, BRANCH_GROUP};
 use tgrep_gpui::engine::search::{FileMatch, Snippet, SnippetLine};
+use tgrep_gpui::engine::workspace;
 
 /// Matching lines shown per file before "Show more".
 const COLLAPSED_MATCH_LINES: usize = 6;
@@ -64,6 +67,9 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_toggle_regex))
             .on_action(cx.listener(Self::on_rebuild_index))
             .on_action(cx.listener(Self::on_toggle_theme))
+            .on_action(cx.listener(Self::on_new_workspace))
+            .on_action(cx.listener(Self::on_open_workspace))
+            .on_action(cx.listener(Self::on_save_workspace_as))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -154,6 +160,7 @@ impl SearchApp {
                         cx.listener(|this, _, window, cx| this.show_page(Page::Search, window, cx)),
                     ),
             )
+            .child(self.render_workspace_menu(cx))
             .child(
                 div().flex_1().max_w(px(960.)).child(
                     Input::new(&self.search_input)
@@ -190,6 +197,84 @@ impl SearchApp {
             )
     }
 
+    /// The workspace's name, opening a menu to switch, save or open another.
+    fn render_workspace_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let app = cx.entity().downgrade();
+        let saved = self.workspace.is_some();
+        let current = self.workspace.clone();
+        let recent: Vec<PathBuf> = Windows::recent(cx)
+            .into_iter()
+            .filter(|file| Some(file) != current.as_ref())
+            .collect();
+        let item =
+            move |label: &str,
+                  icon: Lucide,
+                  run: fn(&mut SearchApp, &mut Window, &mut Context<SearchApp>)| {
+                let app = app.clone();
+                PopupMenuItem::new(label.to_string())
+                    .icon(Icon::new(icon))
+                    .on_click(move |_, window, cx| {
+                        app.update(cx, |this, cx| run(this, window, cx)).ok();
+                    })
+            };
+        let open_recent = {
+            let app = cx.entity().downgrade();
+            move |file: PathBuf| {
+                let app = app.clone();
+                let label = format!("{}  ·  {}", workspace::name(&file), short_dir(&file));
+                PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let file = file.clone();
+                    app.update(cx, |this, cx| this.open_workspace_file(file, window, cx))
+                        .ok();
+                })
+            }
+        };
+
+        Button::new("workspace-menu")
+            .ghost()
+            .small()
+            .icon(Lucide::Layers)
+            .label(self.workspace_name())
+            .tooltip("Switch, save or open a workspace")
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu
+                    .item(item(
+                        "New Window (Ctrl+Shift+N)",
+                        Lucide::AppWindow,
+                        |_, _, cx| {
+                            Windows::new_window(cx);
+                        },
+                    ))
+                    .item(item(
+                        "New Workspace",
+                        Lucide::FilePlus,
+                        |this, window, cx| this.new_workspace(window, cx),
+                    ))
+                    .item(item(
+                        "Open Workspace… (Ctrl+Shift+O)",
+                        Lucide::FolderOpen,
+                        |this, window, cx| this.prompt_open_workspace(window, cx),
+                    ))
+                    .item(item(
+                        if saved {
+                            "Save Workspace As… (Ctrl+Shift+S)"
+                        } else {
+                            "Save Workspace… (Ctrl+Shift+S)"
+                        },
+                        Lucide::Save,
+                        |this, window, cx| this.save_workspace_as(window, cx).detach(),
+                    ));
+                if !recent.is_empty() {
+                    menu = menu.separator().label("Recent");
+                    for file in &recent {
+                        menu = menu.item(open_recent(file.clone()));
+                    }
+                }
+                menu
+            })
+    }
+
     // ----- scope bar ------------------------------------------------------------
 
     /// Which repositories are searched: the selected tags as removable chips,
@@ -223,9 +308,7 @@ impl SearchApp {
                 .child(tag_label(tag))
                 .child(Icon::new(IconName::Close).xsmall())
                 .tooltip(|window, cx| Tooltip::new("Remove from scope").build(window, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_scope_tag(&target, window, cx)
-                }))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_scope_tag(&target, cx)))
         });
 
         let catalog = repo::tag_catalog(repos.iter().map(|repo| &*repo.info));
@@ -284,8 +367,8 @@ impl SearchApp {
                                     .text_color(muted)
                                     .child(format::plural(*count, "repo", "repos")),
                             )
-                            .on_click(move |_, window, cx| {
-                                app.update(cx, |this, cx| this.toggle_scope_tag(&target, window, cx))
+                            .on_click(move |_, _, cx| {
+                                app.update(cx, |this, cx| this.toggle_scope_tag(&target, cx))
                             })
                     });
                     v_flex()
@@ -349,7 +432,7 @@ impl SearchApp {
                         .text_color(link)
                         .hover(|style| style.underline())
                         .child("Clear")
-                        .on_click(cx.listener(|this, _, window, cx| this.clear_scope(window, cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_scope(cx))),
                 )
             })
     }
@@ -907,7 +990,13 @@ impl SearchApp {
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let (muted, link) = (theme.muted_foreground, theme.primary);
+        let current = self.workspace.clone();
+        let recent: Vec<PathBuf> = Windows::recent(cx)
+            .into_iter()
+            .filter(|file| Some(file) != current.as_ref())
+            .take(5)
+            .collect();
         v_flex()
             .flex_1()
             .size_full()
@@ -924,13 +1013,26 @@ impl SearchApp {
                     .child("Add the repositories you work with. Each gets a trigram index in its .tgrep directory, shared with the tgrep CLI. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
             )
             .child(
-                Button::new("welcome-add")
-                    .primary()
-                    .icon(IconName::FolderOpen)
-                    .label("Add Repositories…")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.prompt_for_repositories(window, cx)
-                    })),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("welcome-add")
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("Add Repositories…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.prompt_for_repositories(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("welcome-open")
+                            .outline()
+                            .icon(IconName::FolderOpen)
+                            .label("Open Workspace…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.prompt_open_workspace(window, cx)
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -938,6 +1040,29 @@ impl SearchApp {
                     .text_color(muted)
                     .child("Choosing a folder that holds several git repositories adds each of them."),
             )
+            .when(!recent.is_empty(), |page| {
+                page.child(
+                    v_flex()
+                        .pt_4()
+                        .gap_1()
+                        .items_center()
+                        .text_sm()
+                        .child(div().text_color(muted).child("Recent workspaces"))
+                        .children(recent.into_iter().enumerate().map(|(index, file)| {
+                            let label = workspace::name(&file);
+                            let dir = short_dir(&file);
+                            h_flex()
+                                .id(("welcome-recent", index))
+                                .gap_2()
+                                .cursor_pointer()
+                                .child(div().text_color(link).child(label))
+                                .child(div().text_xs().text_color(muted).child(dir))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_workspace_file(file.clone(), window, cx)
+                                }))
+                        })),
+                )
+            })
     }
 
     // ----- status bar -------------------------------------------------------------
@@ -1045,6 +1170,19 @@ impl SearchApp {
                 .on_click(cx.listener(|this, _, _, cx| this.queue_scope_indexes(cx))),
         )
     }
+}
+
+/// The folder holding `file`, shortened to its last two parts.
+pub(super) fn short_dir(file: &std::path::Path) -> String {
+    let Some(dir) = file.parent() else {
+        return String::new();
+    };
+    let parts: Vec<_> = dir.components().collect();
+    if parts.len() <= 3 {
+        return dir.display().to_string();
+    }
+    let tail: std::path::PathBuf = parts[parts.len() - 2..].iter().collect();
+    format!("…{}{}", std::path::MAIN_SEPARATOR, tail.display())
 }
 
 /// How a tag reads on a chip: `owner: alice`, `branch: main`, `mirror`.

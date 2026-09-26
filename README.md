@@ -12,12 +12,19 @@ you develop in.
 - **Many repositories, one search box.** Add repositories one by one, or pick a folder
   that holds several git repositories to add them all. Results show which repository
   and branch each file comes from.
+- **Workspaces, like VS Code's.** Each window shows a workspace: the repositories it
+  searches. A new one is untitled; save it as a `.tgrep-workspace` file to reopen or
+  share it, and later changes are written back to the file. Open as many windows as
+  you like; windows sharing a repository share its index and file watcher. The open
+  windows, untitled workspaces included, come back on the next start. Closing a
+  window with an unsaved workspace, while others stay open, asks whether to save it.
 - **Tags choose what to search.** Tag repositories freely: plain tags such as `mirror`
   or `dev`, or `key:value` tags such as `owner:alice` or `project:billing`. Every
   repository is also tagged `branch:<name>` with the branch it has checked out, which
   updates when you switch. The scope bar above the results picks the tags to search:
   tags in one group are alternatives (`owner:alice` or `owner:bob`), and groups narrow
-  each other (`dev` and `owner:alice`). The scope is remembered between sessions.
+  each other (`dev` and `owner:alice`). Tags belong to the repository, so every
+  workspace sees them; the scope is remembered per workspace.
 - **Facets narrow the results** without changing the scope: repository, branch, each
   tag group, language and top-level directory, each counted under the others'
   filters, as on grep.app.
@@ -42,7 +49,8 @@ you develop in.
   working while one runs.
 - Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
   page, `Ctrl+F`/`Ctrl+K` focus the search box, `Ctrl+P` the path filter, and
-  `Ctrl+Shift+R` rebuilds the indexes in scope.
+  `Ctrl+Shift+R` rebuilds the indexes in scope. `Ctrl+Shift+N` opens a new window,
+  `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one.
 
 ## Build and run
 
@@ -52,11 +60,23 @@ Requires a recent stable Rust (the repository's `mise.toml` pins `latest`).
 cargo run --release -- path/to/repo path/to/folder-of-repos
 ```
 
-Folders given on the command line are added to the saved repositories. The list,
-tags and scope are kept in `repos.json` under the user configuration directory
-(`%APPDATA%\tgrep-gpui` on Windows, `~/.config/tgrep-gpui` on Linux,
-`~/Library/Application Support/tgrep-gpui` on macOS). Set `TGREP_GPUI_CONFIG_DIR`
-to keep it elsewhere.
+The command line follows VS Code's `code`:
+
+| Command | What it does |
+| --- | --- |
+| `tgrep-gpui` | Restores the last session's windows. |
+| `tgrep-gpui <folder>...` | Opens the folders as a new untitled workspace. A folder holding git repositories stands for each of them. |
+| `tgrep-gpui <file>.tgrep-workspace` | Opens that workspace, or focuses the window already showing it. |
+| `tgrep-gpui --add <folder>...` | Adds the folders to the last focused window's workspace. |
+| `tgrep-gpui --remove <folder>...` | Takes them out again. |
+
+Settings live under the user configuration directory (`%APPDATA%\tgrep-gpui` on
+Windows, `~/.config/tgrep-gpui` on Linux, `~/Library/Application Support/tgrep-gpui`
+on macOS): `library.json` holds every repository's name and tags, `session.json` the
+windows to restore and recent workspaces, and `workspaces/` is where workspaces are
+saved unless you pick elsewhere. The first start after upgrading from a version with
+a single repository list (`repos.json`) turns that list into a saved "Default"
+workspace. Set `TGREP_GPUI_CONFIG_DIR` to keep settings elsewhere.
 
 On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see the
 [Zed Linux build notes](https://github.com/zed-industries/zed/blob/main/docs/src/development/linux.md).
@@ -65,8 +85,9 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `registry.rs` saves the repository list; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. |
-| `src/ui/` | The GPUI views: `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue), `app.rs` a window's search state, `repos.rs` the repositories a window uses and its scope, `render.rs` the search page and `repos_page.rs` the repositories page. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `query.rs` compiles the query and path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's search state, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page. |
+| `src/cli.rs` | The command line. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 

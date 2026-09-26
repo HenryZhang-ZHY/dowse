@@ -28,12 +28,12 @@ impl SearchApp {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_xl().font_semibold().child("Repositories"))
+                    .child(div().text_xl().font_semibold().child(format!("Repositories in {}", self.workspace_name())))
                     .child(
                         div()
                             .text_sm()
                             .text_color(muted)
-                            .child("Tag repositories to choose which ones a search covers. Use plain tags such as mirror or dev, or key:value tags such as owner:alice or project:billing, which get their own group. Every repository is also tagged with its current branch."),
+                            .child("The repositories this workspace searches. Tag them to choose which ones a search covers. Use plain tags such as mirror or dev, or key:value tags such as owner:alice or project:billing, which get their own group. Every repository is also tagged with its current branch. Tags belong to the repository, so every workspace sees them."),
                     ),
             )
             .child(
@@ -58,7 +58,7 @@ impl SearchApp {
                 .py_10()
                 .text_center()
                 .text_color(muted)
-                .child("No repositories yet. Add one, or a folder that holds several git repositories.")
+                .child("No repositories in this workspace yet. Add one, or a folder that holds several git repositories.")
                 .into_any_element()
         } else {
             v_flex().gap_3().children(rows).into_any_element()
@@ -83,7 +83,7 @@ impl SearchApp {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child("Press Enter or leave the field to save tags. Removing a repository only forgets it here; nothing on disk changes."),
+                            .child("Press Enter or leave the field to save tags. Removing a repository takes it out of this workspace only; its index, tags and files are kept."),
                     ),
             )
             .overflow_y_scrollbar()
@@ -150,7 +150,9 @@ impl SearchApp {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::Trash)
-                            .tooltip("Remove from tgrep. Files on disk are not touched.")
+                            .tooltip(
+                                "Remove from this workspace. Its index, tags and files are kept.",
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.remove_repository(&remove_id, window, cx)
                             })),

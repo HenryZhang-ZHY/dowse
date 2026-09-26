@@ -15,9 +15,11 @@ use gpui_kit::*;
 
 use super::hub::RepoHub;
 use super::repos::TagInputs;
+use super::windows::{Opening, Windows};
 use super::{
-    AddRepository, FocusPathFilter, FocusSearch, RebuildIndex, ShowRepositories,
-    ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
+    AddRepository, FocusPathFilter, FocusSearch, NewWorkspace, OpenWorkspace, RebuildIndex,
+    SaveWorkspaceAs, ShowRepositories, ToggleCaseSensitive, ToggleRegex, ToggleTheme,
+    ToggleWholeWord,
 };
 use crate::editor::{self, Launch};
 use tgrep_gpui::engine::facets::{FacetFilter, FacetKind, Facets};
@@ -37,6 +39,10 @@ pub(super) enum Page {
 pub struct SearchApp {
     pub(super) page: Page,
     pub(super) hub: Entity<RepoHub>,
+    /// The saved workspace file, or `None` for an untitled workspace.
+    pub(super) workspace: Option<PathBuf>,
+    /// The user agreed to close the window; don't ask again.
+    pub(super) close_confirmed: bool,
     /// Ids of the repositories this window uses, each acquired from the hub.
     pub(super) members: Vec<String>,
     pub(super) tag_inputs: TagInputs,
@@ -80,9 +86,8 @@ pub(super) fn file_key(file: &FileMatch) -> String {
 }
 
 impl SearchApp {
-    /// `folders` are added to the saved repositories, as if chosen with
-    /// "Add repository".
-    pub fn new(folders: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// A window showing `opening`.
+    pub(super) fn new(opening: Opening, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search code…"));
         let path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter paths: src *.rs !test"));
@@ -92,14 +97,27 @@ impl SearchApp {
             cx.subscribe_in(&path_input, window, Self::on_input_event),
             cx.subscribe_in(&hub, window, Self::on_hub_event),
             cx.observe(&hub, |_, _, cx| cx.notify()),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    Windows::activated(window.window_handle(), cx);
+                    this.prefer_scope(cx);
+                }
+            }),
         ];
         cx.on_release(|this, cx| this.release_repositories(cx))
             .detach();
+        let app = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            app.update(cx, |this, cx| this.should_close(window, cx))
+                .unwrap_or(true)
+        });
         search_input.update(cx, |input, cx| input.focus(window, cx));
 
-        let this = Self {
+        let mut this = Self {
             page: Page::Search,
             hub,
+            workspace: None,
+            close_confirmed: false,
             members: Vec::new(),
             tag_inputs: TagInputs::default(),
             scope: Scope::default(),
@@ -118,14 +136,26 @@ impl SearchApp {
             search_cancel: Arc::new(AtomicBool::new(false)),
             _subscriptions: subscriptions,
         };
-        // After construction, once the window's `Root` exists to show notifications.
-        cx.defer_in(window, move |this, window, cx| {
-            this.restore_repositories(window, cx);
-            if !folders.is_empty() {
-                this.add_repositories(folders, window, cx);
+        // Load the workspace now, so requests right after opening (such as
+        // `--add`) see its repositories.
+        let mut errors = Windows::take_startup_errors(cx);
+        errors.extend(this.apply_workspace(opening, window, cx).err());
+        // Notifications wait for the window's `Root`, which hosts them.
+        cx.defer_in(window, move |_, window, cx| {
+            for error in errors {
+                window.push_notification(Notification::error(error), cx);
             }
         });
         this
+    }
+
+    /// Forget the query's results, as when the workspace changes.
+    pub(super) fn reset_search(&mut self, cx: &mut Context<Self>) {
+        self.search_cancel.store(true, Ordering::Relaxed);
+        self.search_task = None;
+        self.searching = false;
+        self.facet_filter = FacetFilter::default();
+        self.set_results(None, cx);
     }
 
     fn on_input_event(
@@ -400,6 +430,33 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) {
         self.queue_scope_indexes(cx);
+    }
+
+    pub(super) fn on_new_workspace(
+        &mut self,
+        _: &NewWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_workspace(window, cx);
+    }
+
+    pub(super) fn on_open_workspace(
+        &mut self,
+        _: &OpenWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prompt_open_workspace(window, cx);
+    }
+
+    pub(super) fn on_save_workspace_as(
+        &mut self,
+        _: &SaveWorkspaceAs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_workspace_as(window, cx).detach();
     }
 
     pub(super) fn on_toggle_theme(

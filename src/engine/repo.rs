@@ -6,7 +6,9 @@
 //! for the branch it has checked out, so the scope can select by branch.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use super::index::display_path;
 
 /// The group of implicit tags naming the checked-out branch.
 pub const BRANCH_GROUP: &str = "branch";
@@ -164,6 +166,32 @@ pub fn current_branch(root: &Path) -> Option<String> {
     }
 }
 
+/// A folder's identity as a repository: its canonical path as the user would
+/// type it, or, when it does not exist, the path with `.` and `..` resolved.
+pub fn identity(folder: &Path) -> PathBuf {
+    match std::fs::canonicalize(folder) {
+        Ok(canonical) => PathBuf::from(display_path(&canonical)),
+        Err(_) => normalize(folder),
+    }
+}
+
+/// Resolve `.` and `..` without touching the filesystem.
+fn normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component);
+                }
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
 /// The repositories to add for `folder`: the folder itself when it is a git
 /// repository, otherwise the git repositories directly inside it. A folder
 /// with neither is added as-is, since plain folders are searchable too.
@@ -312,6 +340,21 @@ mod tests {
         assert_eq!(discover(&dir.path().join("a")), vec![dir.path().join("a")]);
         let plain = dir.path().join("not-a-repo");
         assert_eq!(discover(&plain), vec![plain.clone()]);
+    }
+
+    #[test]
+    fn identity_is_canonical_or_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            std::fs::create_dir_all(dir.path().join(name)).unwrap();
+        }
+        let canonical = identity(&dir.path().join("a"));
+        assert_eq!(identity(&dir.path().join("b/../a/.")), canonical);
+        assert!(!canonical.to_string_lossy().starts_with(r"\\?\"));
+        assert_eq!(
+            identity(&dir.path().join("gone/x/../y")),
+            normalize(&dir.path().join("gone/y"))
+        );
     }
 
     #[test]
