@@ -17,8 +17,10 @@ use crate::engine::workspace;
 
 pub const USAGE: &str = "\
 Usage: dowse [OPTIONS] [PATH...]
+       dowse <COMMAND> [ARGS...]
 
-Search code across many repositories.
+Search code across many repositories, in the desktop app or from the
+command line.
 
   PATH                  Folders open as a new untitled workspace; a folder
                         holding git repositories adds each of them. A
@@ -28,6 +30,16 @@ Options:
   -a, --add <FOLDER>...     Add folders to the last focused window's workspace
       --remove <FOLDER>...  Remove folders from the last focused window's workspace
   -h, --help                Show this help
+  -V, --version             Show the version
+
+Commands (`dowse <COMMAND> --help` tells more):
+  search   Search the repositories dowse knows, in GitHub code search syntax
+  repos    List the repositories dowse knows, add them and tag them
+  index    Rebuild the indexes of repositories
+  status   Show what the running app is doing
+  quit     Quit the running app, closing its windows
+  dev      The running app's logs, for finding out what went wrong
+  guide    Print the guide to using dowse, written for coding agents
 ";
 
 /// What the command line asks for. Paths are absolute.
@@ -43,8 +55,15 @@ pub enum Command {
     },
     Add(Vec<PathBuf>),
     Remove(Vec<PathBuf>),
+    /// Run without windows, for the command line. Not for people to type:
+    /// `dowse search` and the other subcommands start the app this way when
+    /// it is not running.
+    Background,
     Help,
 }
+
+/// The flag behind [`Command::Background`].
+pub const BACKGROUND_FLAG: &str = "--background";
 
 /// Parse the arguments after the program name, resolving relative paths
 /// against `cwd`.
@@ -58,6 +77,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Com
     let mut mode = Mode::Open;
     let mut paths = Vec::new();
     let mut flags_done = false;
+    let mut background = false;
     for arg in args {
         if !flags_done && let Some(flag) = arg.to_str().filter(|arg| arg.starts_with('-')) {
             let next = match flag {
@@ -66,6 +86,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Com
                     continue;
                 }
                 "-h" | "--help" => return Ok(Command::Help),
+                BACKGROUND_FLAG => {
+                    background = true;
+                    continue;
+                }
                 "-a" | "--add" => Mode::Add,
                 "--remove" => Mode::Remove,
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
@@ -77,6 +101,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Com
             continue;
         }
         paths.push(cwd.join(PathBuf::from(arg)));
+    }
+    if background {
+        return if mode == Mode::Open && paths.is_empty() {
+            Ok(Command::Background)
+        } else {
+            Err(format!(
+                "{BACKGROUND_FLAG} takes nothing else
+
+{USAGE}"
+            ))
+        };
     }
     Ok(match mode {
         Mode::Add if paths.is_empty() => return Err(format!("--add needs a folder\n\n{USAGE}")),
@@ -136,6 +171,13 @@ mod tests {
                 workspaces: vec![],
             })
         );
+    }
+
+    #[test]
+    fn background_runs_the_app_without_windows() {
+        assert_eq!(run(&["--background"]), Ok(Command::Background));
+        assert!(run(&["--background", "api"]).is_err());
+        assert!(run(&["--background", "--add", "api"]).is_err());
     }
 
     #[test]

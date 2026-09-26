@@ -7,6 +7,7 @@ mod highlight;
 mod hub;
 mod palette;
 mod preview;
+mod remote;
 mod render;
 mod repos;
 mod repos_page;
@@ -15,11 +16,11 @@ mod tabs;
 mod windows;
 mod workspace;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use gpui_kit::{App, KeyBinding, actions};
+use gpui_kit::{App, KeyBinding, QuitMode, actions};
 
-use dowse::engine::repo;
+use dowse::ipc::Incoming;
 use dowse::launch::Command;
 
 /// Key context of the main view, which the bindings below are scoped to.
@@ -58,7 +59,11 @@ actions!(
 );
 
 pub fn init(config_root: PathBuf, cx: &mut App) {
+    // Windows decides when the app quits: with no windows open it may keep
+    // running for the command line.
+    cx.set_quit_mode(QuitMode::Explicit);
     windows::Windows::init(config_root, cx);
+    remote::Remote::init(cx);
     cx.on_window_closed(|cx, _| windows::Windows::closed(cx))
         .detach();
     cx.bind_keys([
@@ -105,36 +110,16 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
     });
 }
 
-/// Overrides where settings are kept, e.g. for a portable install or tests.
-const CONFIG_DIR_ENV: &str = "DOWSE_CONFIG_DIR";
-
-/// Where settings are kept.
-pub fn config_root() -> PathBuf {
-    match std::env::var_os(CONFIG_DIR_ENV) {
-        Some(dir) => repo::identity(Path::new(&dir)),
-        None => user_config_dir().join("dowse"),
-    }
-}
-
-/// Where settings were kept before the app was renamed from tgrep-gpui, when
-/// the settings in use are the default ones.
-fn legacy_config_root() -> Option<PathBuf> {
-    std::env::var_os(CONFIG_DIR_ENV)
-        .is_none()
-        .then(|| user_config_dir().join("tgrep-gpui"))
-}
-
-fn user_config_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(std::env::temp_dir)
-}
-
 /// Restore the last session's windows and carry out `command`, then carry
-/// out the commands later launches forward.
-pub fn start(command: Command, forwarded: async_channel::Receiver<Command>, cx: &mut App) {
+/// out the commands later launches forward and answer the command line.
+pub fn start(command: Command, incoming: async_channel::Receiver<Incoming>, cx: &mut App) {
     windows::Windows::start(command, cx);
     cx.spawn(async move |cx| {
-        while let Ok(command) = forwarded.recv().await {
-            cx.update(|cx| windows::Windows::forwarded(command, cx));
+        while let Ok(message) = incoming.recv().await {
+            cx.update(|cx| match message {
+                Incoming::Launch(command) => windows::Windows::forwarded(command, cx),
+                Incoming::Request(request, reply) => remote::handle(request, reply, cx),
+            });
         }
     })
     .detach();

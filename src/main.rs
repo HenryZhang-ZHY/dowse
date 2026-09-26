@@ -14,8 +14,13 @@ use dowse::ipc::{self, Launch};
 use dowse::launch::{self, Command};
 
 fn main() {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if dowse::cli::wants_cli(args.get(1)) {
+        attach_console();
+        std::process::exit(dowse::cli::run(args));
+    }
     let cwd = std::env::current_dir().unwrap_or_default();
-    let command = match launch::parse(std::env::args_os().skip(1), &cwd) {
+    let command = match dowse::cli::parse_launch(args.into_iter().skip(1), &cwd) {
         Ok(Command::Help) => {
             attach_console();
             print!("{}", launch::USAGE);
@@ -29,7 +34,7 @@ fn main() {
         }
     };
 
-    let config_root = ui::config_root();
+    let config_root = dowse::engine::config::default_root();
     let commands = match ipc::claim(&config_root, &command) {
         Launch::Forwarded => return,
         Launch::Primary(commands) => commands,
@@ -51,8 +56,10 @@ fn main() {
         });
 }
 
-/// Release builds on Windows have no console of their own; write `--help`
-/// and errors to the console that started them.
+/// Release builds on Windows have no console of their own; write `--help`,
+/// errors and subcommands' output to the console that started them. The
+/// terminal does not wait for a GUI program, though; `dowse.com` does this
+/// properly.
 fn attach_console() {
     #[cfg(all(windows, not(debug_assertions)))]
     {

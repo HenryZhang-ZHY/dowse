@@ -9,8 +9,16 @@ license = "MIT"
 name = "dowse"
 path = "src/main.rs"
 
+# The command line on Windows, where the app is a GUI program that a
+# terminal does not wait for. Install it as `dowse.com` beside `dowse.exe`:
+# a terminal then runs it for `dowse`, and Explorer runs the app.
+[[bin]]
+name = "dowse-cli"
+path = "src/bin/dowse-cli.rs"
+
 [dependencies]
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 globset = "0.4"
 gpui-kit = { version = "0.6.6", features = ["tree-sitter-languages"] }
 memchr = "2"

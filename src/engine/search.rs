@@ -64,6 +64,21 @@ pub struct SnippetLine {
 }
 
 impl SnippetLine {
+    #[cfg(test)]
+    pub(crate) fn for_test(number: usize, text: &str, is_match: bool) -> Self {
+        Self {
+            number,
+            text: text.into(),
+            highlights: if is_match {
+                vec![0..text.len()]
+            } else {
+                vec![]
+            },
+            is_match,
+            original: None,
+        }
+    }
+
     /// The line as the file has it, without tab expansion or clipping; for
     /// context lines, the displayed text.
     pub fn source(&self) -> &str {

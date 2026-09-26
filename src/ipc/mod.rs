@@ -1,6 +1,8 @@
-//! One running app per settings directory, as with `code`: a later launch
-//! hands its command line to the running app over a local socket (a named
-//! pipe on Windows) and exits.
+//! How the command line and the running app talk. As with `code`, one app
+//! runs per settings directory: a later launch hands its command line to the
+//! running app over a local socket (a named pipe on Windows) and exits. The
+//! `dowse` subcommands send their requests the same way and read the
+//! answers back; see [`protocol`].
 
 use std::io::{self, BufRead as _, BufReader, Write as _};
 use std::path::Path;
@@ -10,13 +12,27 @@ use interprocess::local_socket::{
 };
 
 use crate::launch::Command;
+use protocol::{ClientMessage, Frame, PROTOCOL_VERSION, Request, RequestEnvelope};
+
+pub mod protocol;
 
 /// What this launch does.
 pub enum Launch {
-    /// This process runs the app; later launches' commands arrive here.
-    Primary(async_channel::Receiver<Command>),
+    /// This process runs the app; later launches and command-line requests
+    /// arrive here.
+    Primary(async_channel::Receiver<Incoming>),
     /// The running app took the command; this process is done.
     Forwarded,
+}
+
+/// What reaches the running app over the socket.
+pub enum Incoming {
+    /// A later launch's command line.
+    Launch(Command),
+    /// A command-line request. Send the answer to the sender, ending with
+    /// [`Frame::Done`] or [`Frame::Error`]; a failed send means the command
+    /// line went away.
+    Request(RequestEnvelope, async_channel::Sender<Frame>),
 }
 
 /// Hand `command` to the app already running with the settings in
@@ -33,34 +49,110 @@ fn claim_named(id: &str, command: &Command) -> Launch {
             return Launch::Forwarded;
         }
         match listen(id) {
-            Ok(commands) => return Launch::Primary(commands),
+            Ok(incoming) => return Launch::Primary(incoming),
             Err(error) if error.kind() == io::ErrorKind::AddrInUse => continue,
             Err(_) => break,
         }
     }
     // Without a socket, run on our own rather than not at all.
-    let (_, commands) = async_channel::unbounded();
-    Launch::Primary(commands)
+    let (_, incoming) = async_channel::unbounded();
+    Launch::Primary(incoming)
 }
 
 /// Send `command` to the running app and wait until it has it.
 fn forward(id: &str, command: &Command) -> io::Result<()> {
-    let mut stream = BufReader::new(Stream::connect(socket_name(id)?)?);
+    let connection = Connection::open(id)?;
     allow_running_app_to_take_focus();
-    let mut line = serde_json::to_string(command).map_err(io::Error::other)?;
-    line.push('\n');
-    stream.get_mut().write_all(line.as_bytes())?;
-    let mut reply = String::new();
-    stream.read_line(&mut reply)?;
-    if reply.trim() == "ok" {
-        Ok(())
-    } else {
-        Err(io::Error::other("the running app did not take the command"))
+    for frame in connection.send(&ClientMessage::Launch(command.clone()))? {
+        match frame? {
+            Frame::Done => return Ok(()),
+            Frame::Error(error) => return Err(io::Error::other(error)),
+            _ => {}
+        }
+    }
+    Err(io::Error::other("the running app did not take the command"))
+}
+
+/// A connection to the running app.
+pub struct Connection {
+    stream: BufReader<Stream>,
+}
+
+impl Connection {
+    /// Connect to the app running with the settings in `config_root`. Fails
+    /// when none runs.
+    pub fn connect(config_root: &Path) -> io::Result<Self> {
+        Self::open(&socket_id(config_root))
+    }
+
+    fn open(id: &str) -> io::Result<Self> {
+        Ok(Self {
+            stream: BufReader::new(Stream::connect(socket_name(id)?)?),
+        })
+    }
+
+    /// Send a request and read the answer.
+    pub fn request(self, request: Request, cwd: &Path) -> io::Result<Frames> {
+        self.send(&ClientMessage::Request(RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            cwd: cwd.to_path_buf(),
+            request,
+        }))
+    }
+
+    fn send(mut self, message: &ClientMessage) -> io::Result<Frames> {
+        write_line(self.stream.get_mut(), message)?;
+        Ok(Frames {
+            stream: self.stream,
+            finished: false,
+        })
     }
 }
 
-/// Listen for later launches on a background thread.
-fn listen(id: &str) -> io::Result<async_channel::Receiver<Command>> {
+/// The frames of an answer, up to and including the last one.
+pub struct Frames {
+    stream: BufReader<Stream>,
+    finished: bool,
+}
+
+impl Iterator for Frames {
+    type Item = io::Result<Frame>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        let mut line = String::new();
+        let frame = match self.stream.read_line(&mut line) {
+            Ok(0) => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the running app closed the connection before answering; \
+                 if dowse was just updated, quit it and try again",
+            )),
+            Ok(_) => serde_json::from_str::<Frame>(&line).map_err(io::Error::other),
+            Err(error) => Err(error),
+        };
+        self.finished = frame.as_ref().map_or(true, Frame::is_last);
+        Some(frame)
+    }
+}
+
+impl Frame {
+    /// Whether nothing follows this frame.
+    pub fn is_last(&self) -> bool {
+        matches!(self, Self::Done | Self::Error(_))
+    }
+}
+
+fn write_line(stream: &mut Stream, value: &impl serde::Serialize) -> io::Result<()> {
+    let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+    line.push('\n');
+    stream.write_all(line.as_bytes())
+}
+
+/// Listen for later launches and requests on background threads, one per
+/// connection, so a request that keeps streaming does not hold up others.
+fn listen(id: &str) -> io::Result<async_channel::Receiver<Incoming>> {
     let listener = ListenerOptions::new()
         .name(socket_name(id)?)
         // A socket file left by a crash on Unix; named pipes vanish with
@@ -69,24 +161,71 @@ fn listen(id: &str) -> io::Result<async_channel::Receiver<Command>> {
         .create_sync()?;
     let (sender, receiver) = async_channel::unbounded();
     std::thread::Builder::new()
-        .name("dowse instance".into())
+        .name("dowse listener".into())
         .spawn(move || {
             for stream in listener.incoming().filter_map(Result::ok) {
-                let mut stream = BufReader::new(stream);
-                let mut line = String::new();
-                if stream.read_line(&mut line).is_err() {
-                    continue;
-                }
-                let Ok(command) = serde_json::from_str::<Command>(&line) else {
-                    continue;
-                };
-                if sender.send_blocking(command).is_err() {
-                    break;
-                }
-                stream.get_mut().write_all(b"ok\n").ok();
+                let sender = sender.clone();
+                std::thread::Builder::new()
+                    .name("dowse connection".into())
+                    .spawn(move || serve(stream, &sender))
+                    .ok();
             }
         })?;
     Ok(receiver)
+}
+
+/// Read one message from a connection, hand it to the app and write its
+/// answer back.
+fn serve(stream: Stream, sender: &async_channel::Sender<Incoming>) {
+    let mut stream = BufReader::new(stream);
+    let mut line = String::new();
+    if stream.read_line(&mut line).is_err() {
+        return;
+    }
+    let stream = stream.get_mut();
+    let message = match serde_json::from_str::<ClientMessage>(&line) {
+        Ok(message) => message,
+        Err(error) => {
+            let error = format!(
+                "dowse {} could not read the request ({error}); \
+                 is the command line from another version?",
+                env!("CARGO_PKG_VERSION")
+            );
+            write_line(stream, &Frame::Error(error)).ok();
+            return;
+        }
+    };
+    match message {
+        ClientMessage::Launch(command) => {
+            if sender.send_blocking(Incoming::Launch(command)).is_ok() {
+                write_line(stream, &Frame::Done).ok();
+            }
+        }
+        ClientMessage::Request(envelope) if envelope.version != PROTOCOL_VERSION => {
+            let error = format!(
+                "the running dowse {} speaks protocol {PROTOCOL_VERSION}, this command line {}; \
+                 quit dowse and try again",
+                env!("CARGO_PKG_VERSION"),
+                envelope.version
+            );
+            write_line(stream, &Frame::Error(error)).ok();
+        }
+        ClientMessage::Request(envelope) => {
+            let (reply, answers) = async_channel::unbounded();
+            if sender
+                .send_blocking(Incoming::Request(envelope, reply))
+                .is_err()
+            {
+                return;
+            }
+            while let Ok(frame) = answers.recv_blocking() {
+                let last = frame.is_last();
+                if write_line(stream, &frame).is_err() || last {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// A socket name per user and settings directory, so that a portable
@@ -141,15 +280,52 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn test_socket(name: &str) -> String {
+        format!("dowse-test-{name}-{}.sock", std::process::id())
+    }
+
     #[test]
     fn a_second_launch_hands_its_command_to_the_first() {
-        let id = format!("dowse-test-{}.sock", std::process::id());
-        let Launch::Primary(commands) = claim_named(&id, &Command::Start) else {
+        let id = test_socket("launch");
+        let Launch::Primary(incoming) = claim_named(&id, &Command::Start) else {
             panic!("the first launch should run the app");
         };
         let add = Command::Add(vec![PathBuf::from("/src/api")]);
         assert!(matches!(claim_named(&id, &add), Launch::Forwarded));
-        assert_eq!(commands.recv_blocking().unwrap(), add);
+        match incoming.recv_blocking().unwrap() {
+            Incoming::Launch(command) => assert_eq!(command, add),
+            Incoming::Request(..) => panic!("expected a launch"),
+        }
+    }
+
+    #[test]
+    fn requests_get_every_frame_of_their_answer() {
+        let id = test_socket("request");
+        let Launch::Primary(incoming) = claim_named(&id, &Command::Start) else {
+            panic!("the first launch should run the app");
+        };
+        std::thread::spawn(move || {
+            while let Ok(Incoming::Request(envelope, reply)) = incoming.recv_blocking() {
+                assert_eq!(envelope.request, Request::Status);
+                reply
+                    .send_blocking(Frame::Message(envelope.cwd.display().to_string()))
+                    .unwrap();
+                reply.send_blocking(Frame::Done).unwrap();
+            }
+        });
+        let frames: Vec<Frame> = Connection::open(&id)
+            .unwrap()
+            .request(Request::Status, Path::new("/work"))
+            .unwrap()
+            .collect::<io::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            frames,
+            [
+                Frame::Message(Path::new("/work").display().to_string()),
+                Frame::Done
+            ]
+        );
     }
 
     #[test]

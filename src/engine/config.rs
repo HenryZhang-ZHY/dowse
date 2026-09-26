@@ -10,6 +10,30 @@ use super::registry::Registry;
 use super::session::{Session, WindowSession};
 use super::workspace;
 
+/// Overrides where settings are kept, e.g. for a portable install or tests.
+pub const CONFIG_DIR_ENV: &str = "DOWSE_CONFIG_DIR";
+
+/// Where settings are kept: the user configuration directory's `dowse`, or
+/// `DOWSE_CONFIG_DIR`.
+pub fn default_root() -> PathBuf {
+    match std::env::var_os(CONFIG_DIR_ENV) {
+        Some(dir) => super::repo::identity(Path::new(&dir)),
+        None => user_config_dir().join("dowse"),
+    }
+}
+
+/// Where settings were kept before the app was renamed from tgrep-gpui, when
+/// the settings in use are the default ones.
+pub fn legacy_root() -> Option<PathBuf> {
+    std::env::var_os(CONFIG_DIR_ENV)
+        .is_none()
+        .then(|| user_config_dir().join("tgrep-gpui"))
+}
+
+fn user_config_dir() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(std::env::temp_dir)
+}
+
 /// The configuration directory and the files in it.
 #[derive(Clone, Debug)]
 pub struct ConfigDir {

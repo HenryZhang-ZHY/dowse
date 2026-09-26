@@ -9,6 +9,7 @@ use gpui_kit::*;
 
 use super::app::{SearchApp, TabsOpening};
 use super::hub::RepoHub;
+use super::remote::Remote;
 use dowse::engine::config::ConfigDir;
 use dowse::engine::repo;
 use dowse::engine::session::{Session, WindowSession};
@@ -72,7 +73,7 @@ impl Windows {
     pub(super) fn init(root: PathBuf, cx: &mut App) {
         let config = ConfigDir::new(root);
         let mut startup_errors = Vec::new();
-        if let Some(legacy) = super::legacy_config_root()
+        if let Some(legacy) = dowse::engine::config::legacy_root()
             && let Err(error) = config.adopt_legacy(&legacy)
         {
             startup_errors.push(format!(
@@ -104,8 +105,23 @@ impl Windows {
 
     // ----- starting ------------------------------------------------------------
 
-    /// Bring back the last session's windows, then carry out `command`.
+    /// Bring back the last session's windows, then carry out `command`. In
+    /// the background, for the command line, open none.
     pub(super) fn start(command: Command, cx: &mut App) {
+        if command == Command::Background {
+            log::info!("running in the background for the command line");
+            Remote::started_in_background(cx);
+            return;
+        }
+        Self::restore(cx);
+        Self::run(command, cx);
+        if cx.global::<Self>().open.is_empty() {
+            Self::open_window(Opening::empty(), cx);
+        }
+    }
+
+    /// Open the windows the session remembers.
+    fn restore(cx: &mut App) {
         let restored: Vec<WindowSession> = cx.global::<Self>().session.windows.clone();
         for window in restored {
             let tabs = TabsOpening {
@@ -125,17 +141,20 @@ impl Windows {
             };
             Self::open_window_with_tabs(opening, tabs, cx);
         }
-        Self::run(command, cx);
-        if cx.global::<Self>().open.is_empty() {
-            Self::open_window(Opening::empty(), cx);
-        }
     }
 
     /// Carry out a command a later launch forwarded. Launching without
-    /// arguments opens a new window, as `code` does.
+    /// arguments opens a new window, as `code` does, or brings back the last
+    /// session when the app was running without windows.
     pub(super) fn forwarded(command: Command, cx: &mut App) {
         log::info!("a later launch asked for {command:?}");
         match command {
+            Command::Start if Self::count(cx) == 0 => {
+                Self::restore(cx);
+                if Self::count(cx) == 0 {
+                    Self::new_window(cx);
+                }
+            }
             Command::Start => Self::new_window(cx),
             command => Self::run(command, cx),
         }
@@ -144,6 +163,7 @@ impl Windows {
     /// Carry out a command-line request in the running app.
     pub(super) fn run(command: Command, cx: &mut App) {
         match command {
+            Command::Background => {}
             Command::Start | Command::Help => {
                 if let Some(target) = Self::last(cx) {
                     target
@@ -333,8 +353,9 @@ impl Windows {
         Self::save(cx);
     }
 
-    /// A window closed. When it was the last one the app quits and the
-    /// session keeps it, to open it again next time.
+    /// A window closed. When it was the last one the app quits, unless the
+    /// command line is using it, and the session keeps the window, to open
+    /// it again next time.
     pub(super) fn closed(cx: &mut App) {
         let open = cx.windows();
         cx.global_mut::<Self>()
@@ -342,7 +363,11 @@ impl Windows {
             .retain(|window| open.contains(&window.handle));
         log::info!("closed a window; {} left", open.len());
         if open.is_empty() {
-            cx.quit();
+            if Remote::keeps_app_running(cx) {
+                log::info!("staying in the background for the command line");
+            } else {
+                cx.quit();
+            }
         } else {
             Self::save(cx);
         }
@@ -354,6 +379,10 @@ impl Windows {
     }
 
     // ----- the session ---------------------------------------------------------
+
+    pub(super) fn config(cx: &App) -> ConfigDir {
+        cx.global::<Self>().config.clone()
+    }
 
     pub(super) fn workspaces_dir(cx: &App) -> PathBuf {
         cx.global::<Self>().config.workspaces_dir()

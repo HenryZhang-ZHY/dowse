@@ -206,19 +206,36 @@ impl RepoHub {
         tags: Vec<String>,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        let Some(state) = self.open.get_mut(id) else {
-            return Ok(());
-        };
-        if state.info.tags == tags {
+        if self.library_tags(id) == tags {
             return Ok(());
         }
-        let mut info = (*state.info).clone();
-        info.tags = tags.clone();
-        state.info = Arc::new(info);
+        if let Some(state) = self.open.get_mut(id) {
+            let mut info = (*state.info).clone();
+            info.tags = tags.clone();
+            state.info = Arc::new(info);
+        }
         self.library.set_tags(Path::new(id), tags);
         cx.emit(HubEvent::MetadataChanged);
         cx.notify();
         self.save()
+    }
+
+    /// Every repository known, open or not.
+    pub(super) fn library(&self) -> &Library {
+        &self.library
+    }
+
+    pub(super) fn library_tags(&self, id: &str) -> Vec<String> {
+        self.library
+            .get(Path::new(id))
+            .map(|entry| entry.tags.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn library_name(&self, id: &str) -> Option<String> {
+        self.library
+            .get(Path::new(id))
+            .map(|entry| entry.name.clone())
     }
 
     fn save(&self) -> anyhow::Result<()> {
@@ -288,6 +305,34 @@ impl RepoHub {
             .collect();
         views.sort_by_key(|view| view.info.name.to_lowercase());
         views
+    }
+
+    /// A snapshot of the repository, when it is open.
+    pub(super) fn view(&self, id: &str) -> Option<RepoView> {
+        self.open.get(id).map(|state| RepoView {
+            info: state.info.clone(),
+            activity: state.activity.clone(),
+            changed_files: state.changed_files,
+        })
+    }
+
+    pub(super) fn open_count(&self) -> usize {
+        self.open.len()
+    }
+
+    /// The names of the repositories being indexed and of those waiting to be.
+    pub(super) fn build_queue(&self) -> (Vec<String>, Vec<String>) {
+        let names = |activity: IndexActivity| -> Vec<String> {
+            let mut names: Vec<String> = self
+                .open
+                .values()
+                .filter(|state| state.activity == activity)
+                .map(|state| state.info.name.clone())
+                .collect();
+            names.sort();
+            names
+        };
+        (names(IndexActivity::Building), names(IndexActivity::Queued))
     }
 
     /// What a search over `ids` reads, and whether one of them is still
