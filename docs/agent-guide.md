@@ -91,7 +91,8 @@ dowse search --table csv '/version = "(?<version>[^"]+)"/ path:Cargo.toml'
 dowse repos add ~/src/api ~/src/web -t dev   # add, tagging them
 dowse repos add ~/mirrors                    # a folder of repositories adds each
 dowse repos tag api owner:alice -r mirror    # add owner:alice, remove mirror
-dowse index --here --wait                    # rebuild an index and wait
+dowse index --here --wait                    # update an index and wait
+dowse index --here --full                    # rebuild it from every file
 dowse status                                 # the app, its windows and indexing
 ```
 

@@ -214,7 +214,7 @@ impl SearchApp {
                             .ghost()
                             .xsmall()
                             .icon(Lucide::RefreshCw)
-                            .tooltip("Rebuild this index")
+                            .tooltip("Update this index, reading only the files that changed")
                             .disabled(repo.is_busy() || repo.activity == IndexActivity::Missing)
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {

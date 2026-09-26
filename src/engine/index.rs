@@ -1,17 +1,57 @@
-//! One repository's tgrep index: where it lives, how it is built and
-//! published, and the set of files a search reads.
+//! One repository's tgrep index: where it lives, how it is built, brought up
+//! to date and published, and the set of files a search reads.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 use tgrep_core::builder::{self, BuildOptions};
-use tgrep_core::meta::{INDEX_FORMAT_VERSION, IndexMeta};
+use tgrep_core::meta::{self, FileEvidence, INDEX_FORMAT_VERSION, IndexMeta};
 use tgrep_core::path_index;
 use tgrep_core::query::{self, QueryPlan};
 use tgrep_core::reader::IndexReader;
 use tgrep_core::visibility::PathVisibility;
-use tgrep_core::walker::{self, WalkOptions};
+use tgrep_core::walker::{self, FileMeta, MetaWalkOptions, MetaWalkResult, WalkOptions};
+
+/// How [`RepoIndex::update_index`] brought an index up to date.
+#[must_use = "a changed index is not used until it is published"]
+pub enum IndexUpdate {
+    /// Every file matched the index, so there is nothing to publish.
+    UpToDate,
+    /// Only the files that changed were read, and merged into a copy of the
+    /// index.
+    Merged {
+        staged: StagedIndex,
+        changes: FileChanges,
+    },
+    /// The index was built again from every file, for `reason`.
+    Rebuilt { staged: StagedIndex, reason: String },
+}
+
+impl IndexUpdate {
+    /// The new index to publish, if there is one.
+    pub fn into_staged(self) -> Option<StagedIndex> {
+        match self {
+            Self::UpToDate => None,
+            Self::Merged { staged, .. } | Self::Rebuilt { staged, .. } => Some(staged),
+        }
+    }
+}
+
+/// How many files differ from an index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileChanges {
+    pub modified: usize,
+    pub added: usize,
+    pub deleted: usize,
+}
+
+impl FileChanges {
+    pub fn total(&self) -> usize {
+        self.modified + self.added + self.deleted
+    }
+}
 
 /// A searchable folder and its index. The index lives in `<root>/.tgrep`, the same
 /// place `tgrep index` and `tgrep serve` use, so the GUI and the CLI share it.
@@ -100,6 +140,177 @@ impl RepoIndex {
         Ok(StagedIndex { staging, index_dir })
     }
 
+    /// Bring the index up to date, reading only the files that changed.
+    ///
+    /// Compares every file's metadata with the stamps the index keeps of the
+    /// reads that built it, indexes the modified and new files on their own,
+    /// and streams them into a copy of the index without the stale and
+    /// deleted entries. The merge copies the old postings as they are rather
+    /// than reading the files again, so its cost follows the size of the
+    /// index, not of the source.
+    ///
+    /// Builds the whole index instead, as [`Self::build_index`] does, when
+    /// there is no usable index to start from, when part of the folder
+    /// could not be read (its files would look deleted), or when most files
+    /// changed anyway. Like a build, it leaves the live index alone until
+    /// the result is published.
+    pub fn update_index(&self) -> Result<IndexUpdate> {
+        let rebuild = |reason: String| -> Result<IndexUpdate> {
+            Ok(IndexUpdate::Rebuilt {
+                staged: self.build_index()?,
+                reason,
+            })
+        };
+        let Some((reader, _)) = self.open_index() else {
+            return rebuild("there is no usable index".into());
+        };
+        let started = SystemTime::now();
+        let walk = self.walk_metadata();
+        if walk.skipped_error > 0 {
+            return rebuild(format!(
+                "{} could not be read",
+                plural(walk.skipped_error, "entry", "entries")
+            ));
+        }
+        let evidence = meta::read_file_evidence(&self.index_dir).unwrap_or_default();
+        if evidence.stamps.is_empty() && reader.num_files() > 0 {
+            return rebuild("the index keeps no file stamps".into());
+        }
+        let stale = StaleFiles::classify(
+            &walk.files,
+            &evidence,
+            reader.all_paths().iter().map(String::as_str),
+        );
+        let changes = stale.changes();
+        if changes.total() == 0 {
+            drop(reader);
+            self.mark_current(started)?;
+            return Ok(IndexUpdate::UpToDate);
+        }
+        if changes.total() * 2 > walk.files.len().max(reader.num_files()) {
+            drop(reader);
+            return rebuild(format!(
+                "{} of {} changed",
+                changes.total(),
+                plural(walk.files.len(), "file", "files")
+            ));
+        }
+        let staged = self
+            .merge_changes(&reader, walk, evidence, stale)
+            .with_context(|| format!("failed to update the index of {}", self.display_root()))?;
+        Ok(IndexUpdate::Merged { staged, changes })
+    }
+
+    /// Stage the live index with `stale`'s files read again: a delta index of
+    /// the modified and new files, merged with the live one minus their old
+    /// entries and those of deleted files.
+    fn merge_changes(
+        &self,
+        reader: &IndexReader,
+        walk: MetaWalkResult,
+        mut evidence: FileEvidence,
+        stale: StaleFiles,
+    ) -> Result<StagedIndex> {
+        let index_dir = std::fs::canonicalize(&self.index_dir)?;
+        let staging = index_dir.join(STAGING_DIR);
+        let delta_dir = index_dir.join(DELTA_DIR);
+        for dir in [&staging, &delta_dir] {
+            if dir.exists() {
+                std::fs::remove_dir_all(dir)
+                    .with_context(|| format!("cannot clear {}", display_path(dir)))?;
+            }
+        }
+
+        let files: Vec<PathBuf> = stale
+            .read
+            .iter()
+            .map(|relative| self.full_path(relative))
+            .collect();
+        let outcome = builder::build_index_for_files(
+            &self.root,
+            &delta_dir,
+            &files,
+            builder::DEFAULT_INDEX_BUFFER_BYTES,
+        )?;
+
+        // Every stale path loses its old entry and its stamp. A file that
+        // could not be read keeps its old entry, and goes without a stamp so
+        // that the next update tries it again.
+        let mut removed: HashSet<String> =
+            stale.read.iter().chain(&stale.deleted).cloned().collect();
+        for path in &removed {
+            evidence.remove(path);
+        }
+        for path in &outcome.unreadable {
+            if let Some(relative) = relative_path(&self.root, path) {
+                log::warn!("could not read {relative} to index it; keeping its old entry");
+                removed.remove(&relative);
+            }
+        }
+        let mut content_ids = outcome.content_ids;
+        for (path, version) in outcome.versions {
+            let content_id = content_ids.remove(&path);
+            evidence.insert_verified(path, version.stamp().clone(), content_id, Some(version));
+        }
+
+        let delta = IndexReader::open(&delta_dir)?;
+        builder::merge_index_with_delta(&self.root, &staging, reader, &delta, &removed, true)?;
+
+        // What a full build writes beside the postings: which entries are
+        // hidden, the listed files that have no content entry, and the stamps.
+        let mut staged_meta = IndexMeta::load(&staging)?;
+        staged_meta.visibility = walk.visibility.clone();
+        staged_meta.hidden_complete = true;
+        staged_meta.save(&staging)?;
+        let file_table_id = staged_meta
+            .file_table_id
+            .context("the merged index has no file-table identity")?;
+        let content: HashSet<&str> = reader
+            .all_paths()
+            .iter()
+            .filter(|path| !removed.contains(path.as_str()))
+            .chain(delta.all_paths())
+            .map(String::as_str)
+            .collect();
+        let mut extra_paths: Vec<String> = walk
+            .listed_files
+            .into_iter()
+            .filter(|path| !content.contains(path.as_str()))
+            .collect();
+        extra_paths.sort_unstable();
+        drop(content);
+        path_index::write_extra_paths_with_visibility(
+            &staging,
+            &extra_paths,
+            &walk.visibility,
+            file_table_id,
+            true,
+        )?;
+        meta::write_file_evidence(&evidence, &staging)?;
+
+        // Windows cannot delete mapped files.
+        drop(delta);
+        let _ = std::fs::remove_dir_all(&delta_dir);
+        Ok(StagedIndex { staging, index_dir })
+    }
+
+    /// Record that the live index was found current as of `time`, when the
+    /// walk that checked it started.
+    fn mark_current(&self, time: SystemTime) -> Result<()> {
+        let index_dir = std::fs::canonicalize(&self.index_dir)?;
+        let staging = index_dir.join(STAGING_DIR);
+        std::fs::create_dir_all(&staging)?;
+        let mut current = IndexMeta::load(&index_dir)?;
+        if let Ok(since) = time.duration_since(SystemTime::UNIX_EPOCH) {
+            current.updated_at = since.as_secs();
+        }
+        // Written beside it and swapped in, so no reader sees half a file.
+        current.save(&staging)?;
+        std::fs::rename(staging.join(META_FILE), index_dir.join(META_FILE))?;
+        let _ = std::fs::remove_dir_all(&staging);
+        Ok(())
+    }
+
     /// Load the files a search reads: the index when it is usable, otherwise
     /// a walk of the folder that honours `.gitignore` like ripgrep.
     pub fn load_corpus(&self) -> Corpus {
@@ -134,6 +345,20 @@ impl RepoIndex {
             .then_some((reader, visibility.paths))
     }
 
+    /// Files that differ from the index: modified, added or deleted since it
+    /// read them, found by comparing the folder with the file stamps the
+    /// index keeps. Takes a walk of the folder, and reads no file. `None`
+    /// when the index keeps no stamps.
+    pub fn stale_files(&self) -> Option<Vec<String>> {
+        let evidence = meta::read_file_evidence(&self.index_dir).ok()?;
+        if evidence.stamps.is_empty() {
+            return None;
+        }
+        let walk = self.walk_metadata();
+        let stale = StaleFiles::classify(&walk.files, &evidence, std::iter::empty());
+        Some(stale.read.into_iter().chain(stale.deleted).collect())
+    }
+
     /// Files a search would read that were modified after `time`: those an
     /// index built then may not have seen. Takes a walk of the folder, and
     /// reads no file.
@@ -146,6 +371,22 @@ impl RepoIndex {
                     .is_ok_and(|modified| modified > time)
             })
             .collect()
+    }
+
+    /// Every file's metadata, walked with the rules a build walks with.
+    fn walk_metadata(&self) -> MetaWalkResult {
+        walker::walk_file_metadata(
+            &self.root,
+            &MetaWalkOptions {
+                exclude_paths: std::fs::canonicalize(&self.index_dir).into_iter().collect(),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn full_path(&self, relative: &str) -> PathBuf {
+        self.root
+            .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR))
     }
 
     fn walk_files(&self) -> Vec<String> {
@@ -173,8 +414,86 @@ impl RepoIndex {
 /// Where [`RepoIndex::build_index`] writes, inside the index directory so that
 /// tgrep's walks skip it too.
 const STAGING_DIR: &str = "gui-staging";
+/// Where [`RepoIndex::update_index`] indexes changed files before merging them.
+const DELTA_DIR: &str = "gui-delta";
 /// tgrep-core reads this file to decide whether an index exists.
 const META_FILE: &str = "meta.json";
+
+/// The files that differ from an index, by their stamps.
+struct StaleFiles {
+    /// Modified and new files, to read.
+    read: Vec<String>,
+    /// How many of `read` are new.
+    added: usize,
+    /// Files the index stamped or holds that are gone.
+    deleted: Vec<String>,
+}
+
+impl StaleFiles {
+    /// Compare the walked `files` with the `evidence` of the reads that built
+    /// the index, as `tgrep serve` does. A file counts as modified when its
+    /// stamp or its precise version differs, or its version is unknown. A
+    /// file without a stamp is new; that includes one whose last read
+    /// failed, so it is tried again. `indexed` adds the index's own paths,
+    /// so that entries without a stamp go too when their file is gone.
+    fn classify<'a>(
+        files: &'a [FileMeta],
+        evidence: &'a FileEvidence,
+        indexed: impl Iterator<Item = &'a str>,
+    ) -> Self {
+        let mut read = Vec::new();
+        let mut added = 0;
+        for file in files {
+            let path = &file.relative_path;
+            match evidence.stamps.get(path) {
+                None => {
+                    added += 1;
+                    read.push(path.clone());
+                }
+                Some(stamp)
+                    if stamp.mtime != file.mtime
+                        || stamp.size != file.size
+                        || file.version.is_none()
+                        || evidence.versions.get(path) != file.version.as_ref() =>
+                {
+                    read.push(path.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        let present: HashSet<&str> = files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+        let mut deleted: Vec<String> = evidence
+            .stamps
+            .keys()
+            .map(String::as_str)
+            .chain(indexed)
+            .filter(|path| !present.contains(path))
+            .map(str::to_string)
+            .collect();
+        deleted.sort_unstable();
+        deleted.dedup();
+        Self {
+            read,
+            added,
+            deleted,
+        }
+    }
+
+    fn changes(&self) -> FileChanges {
+        FileChanges {
+            modified: self.read.len() - self.added,
+            added: self.added,
+            deleted: self.deleted.len(),
+        }
+    }
+}
+
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
 
 /// A freshly built index waiting to replace the live one.
 #[must_use = "the new index is not used until it is published"]
@@ -383,6 +702,135 @@ mod tests {
                 .iter()
                 .all(|p| !p.starts_with('.'))
         );
+    }
+
+    fn candidates(index: &RepoIndex, literal: &str) -> Vec<String> {
+        let corpus = index.load_corpus();
+        assert!(corpus.is_indexed());
+        corpus.candidates(&query::build_literal_plan(literal, false))
+    }
+
+    /// Enough files that a few changes stay under the full-rebuild cut-off.
+    fn larger_tree() -> tempfile::TempDir {
+        let dir = tree();
+        for n in 0..8 {
+            std::fs::write(
+                dir.path().join(format!("src/filler{n}.rs")),
+                format!("fn filler_{n}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn updating_reads_only_changed_files_and_merges_them() {
+        let dir = larger_tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn moved_needle() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/added.rs"), "fn brand_new() {}\n").unwrap();
+        std::fs::remove_file(dir.path().join("src/filler0.rs")).unwrap();
+        std::fs::write(dir.path().join(".hidden.rs"), "fn brand_new() {}\n").unwrap();
+
+        let update = index.update_index().unwrap();
+        let IndexUpdate::Merged { staged, changes } = update else {
+            panic!("expected a merge");
+        };
+        assert_eq!(
+            changes,
+            FileChanges {
+                modified: 1,
+                added: 2,
+                deleted: 1
+            }
+        );
+        staged.publish().unwrap();
+
+        assert!(matches!(
+            index.index_status(),
+            IndexStatus::Ready { files: 11, .. }
+        ));
+        assert!(candidates(&index, "needle_here").is_empty());
+        assert_eq!(candidates(&index, "moved_needle"), ["src/lib.rs"]);
+        // Hidden files are indexed but, as after a build, not searched.
+        assert_eq!(candidates(&index, "brand_new"), ["src/added.rs"]);
+        assert!(candidates(&index, "filler_0").is_empty());
+        assert_eq!(candidates(&index, "filler_1"), ["src/filler1.rs"]);
+        assert!(!index.index_dir.join(DELTA_DIR).exists());
+        assert!(!index.index_dir.join(STAGING_DIR).exists());
+
+        // The merged index stamps what it read, so nothing looks stale now.
+        assert_eq!(index.stale_files(), Some(Vec::new()));
+        assert!(matches!(
+            index.update_index().unwrap(),
+            IndexUpdate::UpToDate
+        ));
+    }
+
+    #[test]
+    fn updating_an_unchanged_index_publishes_nothing() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
+        // An open corpus is no obstacle: nothing is replaced.
+        assert!(matches!(
+            index.update_index().unwrap(),
+            IndexUpdate::UpToDate
+        ));
+        drop(corpus);
+        assert_eq!(candidates(&index, "needle_here"), ["src/lib.rs"]);
+    }
+
+    #[test]
+    fn updating_with_only_deletions_merges_an_empty_delta() {
+        let dir = larger_tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        std::fs::remove_file(dir.path().join("src/lib.rs")).unwrap();
+
+        let IndexUpdate::Merged { staged, changes } = index.update_index().unwrap() else {
+            panic!("expected a merge");
+        };
+        assert_eq!(changes.deleted, 1);
+        staged.publish().unwrap();
+        assert!(candidates(&index, "needle_here").is_empty());
+        assert_eq!(candidates(&index, "filler_7"), ["src/filler7.rs"]);
+    }
+
+    #[test]
+    fn updating_without_an_index_or_after_many_changes_rebuilds() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        let update = index.update_index().unwrap();
+        assert!(matches!(update, IndexUpdate::Rebuilt { .. }));
+        update.into_staged().unwrap().publish().unwrap();
+
+        // Both files change: reading them all is no dearer than a merge.
+        std::fs::write(dir.path().join("src/lib.rs"), "fn one() {}\n").unwrap();
+        std::fs::write(dir.path().join("README.md"), "two\n").unwrap();
+        let update = index.update_index().unwrap();
+        assert!(matches!(update, IndexUpdate::Rebuilt { .. }));
+        update.into_staged().unwrap().publish().unwrap();
+        assert_eq!(candidates(&index, "one()"), ["src/lib.rs"]);
+    }
+
+    #[test]
+    fn stale_files_include_deleted_and_moved_files() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        assert_eq!(index.stale_files(), None);
+        index.build_index().unwrap().publish().unwrap();
+        assert_eq!(index.stale_files(), Some(Vec::new()));
+
+        // A move keeps the file's modification time, which a check by time
+        // alone would miss.
+        std::fs::rename(dir.path().join("src/lib.rs"), dir.path().join("lib.rs")).unwrap();
+        let mut stale = index.stale_files().unwrap();
+        stale.sort();
+        assert_eq!(stale, ["lib.rs", "src/lib.rs"]);
     }
 
     #[test]

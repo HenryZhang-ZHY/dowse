@@ -496,6 +496,11 @@ impl DevTools {
                 },
             ))
             .child(tile(
+                "Index updates",
+                output::number(snapshot.index_updates.count as usize),
+                timing(&snapshot.index_updates),
+            ))
+            .child(tile(
                 "Log problems",
                 format!("{errors} errors"),
                 format!("{warnings} warnings among the records kept"),

@@ -23,7 +23,7 @@ use gpui_kit::*;
 use super::CONTEXT;
 use super::app::{AppCommand, Page, SearchApp};
 use super::highlight::LineStyles;
-use super::hub::{IndexActivity, RepoView};
+use super::hub::{IndexActivity, IndexJob, RepoView};
 use super::table::ResultsView;
 use super::tabs::file_key;
 use super::windows::Windows;
@@ -74,6 +74,7 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_toggle_case_sensitive))
             .on_action(cx.listener(Self::on_toggle_whole_word))
             .on_action(cx.listener(Self::on_toggle_regex))
+            .on_action(cx.listener(Self::on_update_index))
             .on_action(cx.listener(Self::on_rebuild_index))
             .on_action(cx.listener(Self::on_toggle_theme))
             .on_action(cx.listener(Self::on_new_workspace))
@@ -1471,10 +1472,14 @@ impl SearchApp {
                 .ghost()
                 .xsmall()
                 .icon(Lucide::RefreshCw)
-                .label("Rebuild indexes")
-                .tooltip("Re-index the repositories in scope (Ctrl+Shift+R)")
+                .label("Update indexes")
+                .tooltip(
+                    "Bring the indexes in scope up to date, reading only the files that changed (Ctrl+Shift+R)",
+                )
                 .disabled(in_scope.is_empty())
-                .on_click(cx.listener(|this, _, _, cx| this.queue_scope_indexes(cx))),
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.queue_scope_indexes(IndexJob::Update, cx)),
+                ),
         )
     }
 }

@@ -12,7 +12,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 
 use super::app::SearchApp;
-use super::hub::{HubEvent, RepoHub, RepoView};
+use super::hub::{HubEvent, IndexJob, RepoHub, RepoView};
 use super::windows::Windows;
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::SearchSource;
@@ -351,18 +351,20 @@ impl SearchApp {
         self.hub.update(cx, |hub, _| hub.prefer(ids));
     }
 
-    /// Rebuild every repository in scope.
-    pub(super) fn queue_scope_indexes(&mut self, cx: &mut Context<Self>) {
+    /// Do `job` to the index of every repository in scope.
+    pub(super) fn queue_scope_indexes(&mut self, job: IndexJob, cx: &mut Context<Self>) {
         let ids = self.in_scope_ids(cx);
         self.hub.update(cx, |hub, cx| {
             for id in &ids {
-                hub.queue_index(id, cx);
+                hub.queue_index(id, job, cx);
             }
         });
     }
 
+    /// Bring one repository's index up to date.
     pub(super) fn queue_index(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.hub.update(cx, |hub, cx| hub.queue_index(id, cx));
+        self.hub
+            .update(cx, |hub, cx| hub.queue_index(id, IndexJob::Update, cx));
     }
 }
 

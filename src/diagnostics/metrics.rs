@@ -144,7 +144,12 @@ pub struct MetricsSnapshot {
     /// from 0 to 1.
     pub index_savings: f64,
     pub index_loads: TimingSummary,
+    /// Whole indexes built.
     pub index_builds: TimingSummary,
+    /// Indexes brought up to date by reading only the files that changed,
+    /// including those found current.
+    #[serde(default)]
+    pub index_updates: TimingSummary,
     pub index_build_failures: u64,
     /// Command-line requests by kind.
     pub requests: BTreeMap<String, u64>,
@@ -168,6 +173,7 @@ struct Inner {
     corpus_files: u64,
     index_loads: Timing,
     index_builds: Timing,
+    index_updates: Timing,
     index_build_failures: u64,
     requests: BTreeMap<String, u64>,
     recent_searches: VecDeque<SearchRecord>,
@@ -212,6 +218,10 @@ impl Metrics {
         }
     }
 
+    pub fn record_index_update(&self, elapsed: Duration) {
+        self.inner().index_updates.record(millis(elapsed));
+    }
+
     pub fn count_request(&self, kind: &str) {
         *self.inner().requests.entry(kind.to_string()).or_default() += 1;
     }
@@ -230,6 +240,7 @@ impl Metrics {
             },
             index_loads: inner.index_loads.summary(),
             index_builds: inner.index_builds.summary(),
+            index_updates: inner.index_updates.summary(),
             index_build_failures: inner.index_build_failures,
             requests: inner.requests.clone(),
             log_counts: super::log::buffer().counts(),

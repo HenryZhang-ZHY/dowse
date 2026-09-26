@@ -18,7 +18,7 @@ use async_channel::Sender;
 use gpui_kit::*;
 
 use super::devtools;
-use super::hub::{IndexActivity, RepoHub};
+use super::hub::{IndexActivity, IndexJob, RepoHub};
 use super::windows::Windows;
 use dowse::diagnostics::log as app_log;
 use dowse::diagnostics::metrics::{Origin, SearchRecord, metrics};
@@ -153,8 +153,13 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
         }
         Request::AddRepos { folders, tags } => add_repos(&folders, &tags, cx),
         Request::Tag { repo, add, remove } => tag(&repo, &add, &remove, &cwd, cx),
-        Request::Index { scope, wait } => {
-            index(&scope, wait, &cwd, reply.clone(), cx);
+        Request::Index { scope, wait, full } => {
+            let job = if full {
+                IndexJob::Rebuild
+            } else {
+                IndexJob::Update
+            };
+            index(&scope, wait, job, &cwd, reply.clone(), cx);
             Ok(Vec::new())
         }
         Request::Logs(request) => {
@@ -464,7 +469,14 @@ fn tag(
     })])
 }
 
-fn index(scope: &ScopeSpec, wait: bool, cwd: &Path, reply: Sender<Frame>, cx: &mut App) {
+fn index(
+    scope: &ScopeSpec,
+    wait: bool,
+    job: IndexJob,
+    cwd: &Path,
+    reply: Sender<Frame>,
+    cx: &mut App,
+) {
     let repos = match select(scope, cwd, cx) {
         Ok(repos) => repos,
         Err(error) => {
@@ -479,7 +491,7 @@ fn index(scope: &ScopeSpec, wait: bool, cwd: &Path, reply: Sender<Frame>, cx: &m
         cx.update(|cx| {
             RepoHub::global(cx).update(cx, |hub, cx| {
                 for id in &ids {
-                    hub.queue_index(id, cx);
+                    hub.queue_index(id, job, cx);
                 }
             })
         });
@@ -491,7 +503,14 @@ fn index(scope: &ScopeSpec, wait: bool, cwd: &Path, reply: Sender<Frame>, cx: &m
                 .collect::<Vec<_>>()
         });
         reply
-            .send(Frame::Message(format!("indexing {}", names.join(", "))))
+            .send(Frame::Message(format!(
+                "{} {}",
+                match job {
+                    IndexJob::Update => "updating",
+                    IndexJob::Rebuild => "rebuilding",
+                },
+                names.join(", ")
+            )))
             .await
             .ok();
         let mut pending = ids.clone();

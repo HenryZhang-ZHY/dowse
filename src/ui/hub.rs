@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::format;
 use dowse::diagnostics::metrics::metrics;
-use dowse::engine::index::{Corpus, IndexStatus, RepoIndex};
+use dowse::engine::index::{Corpus, IndexStatus, IndexUpdate, RepoIndex};
 use dowse::engine::library::{Library, LibraryEntry};
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::SearchSource;
@@ -23,8 +23,9 @@ use dowse::engine::watch::ChangeTracker;
 /// How often change counts and checked-out branches are refreshed.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Past this many changed files, reading them all on every search costs more
-/// than re-indexing, so the index is rebuilt in the background.
-const AUTO_REINDEX_CHANGES: usize = 2_000;
+/// than bringing the index up to date, which reads only those files and
+/// merges them in, so that is done in the background.
+const AUTO_UPDATE_CHANGES: usize = 500;
 /// Files modified this long before an index was finished may have changed
 /// after the build read them.
 const STALE_SLACK: Duration = Duration::from_secs(10);
@@ -68,6 +69,8 @@ struct RepoState {
     index: Option<RepoIndex>,
     corpus: Option<Arc<Corpus>>,
     activity: IndexActivity,
+    /// What the queued or running build does.
+    job: IndexJob,
     tracker: Option<Arc<ChangeTracker>>,
     changed_files: usize,
     /// How many windows use the repository.
@@ -87,6 +90,17 @@ pub(super) enum IndexActivity {
     Failed(String),
     /// The folder is gone; it stays registered until removed.
     Missing,
+}
+
+/// What a build does to a repository's index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum IndexJob {
+    /// Read the files that changed and merge them in; build the whole index
+    /// only when there is none to start from or most files changed.
+    #[default]
+    Update,
+    /// Read every file again.
+    Rebuild,
 }
 
 impl IndexActivity {
@@ -379,8 +393,8 @@ impl RepoHub {
     }
 
     /// Load the repository's index (or walk it when there is none), then
-    /// queue a build if it has no usable index. Files modified since the
-    /// index was built, while nothing watched them, count as changed, so
+    /// queue a build if it has no usable index. Files that differ from the
+    /// index, changed while nothing watched them, count as changed, so
     /// searches read them.
     fn load(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(state) = self.open.get_mut(id) else {
@@ -402,9 +416,14 @@ impl RepoHub {
                         (IndexStatus::Ready { updated_at, .. }, Some(tracker))
                             if corpus.is_indexed() =>
                         {
-                            let stale = index.modified_since(*updated_at - STALE_SLACK);
-                            tracker.note(stale.clone());
-                            stale.len()
+                            // The index's file stamps also reveal deleted
+                            // files, and moved ones that kept their times.
+                            let stale = index
+                                .stale_files()
+                                .unwrap_or_else(|| index.modified_since(*updated_at - STALE_SLACK));
+                            let count = stale.len();
+                            tracker.note(stale);
+                            count
                         }
                         _ => 0,
                     };
@@ -433,7 +452,7 @@ impl RepoHub {
                 let needs_index = !matches!(status, IndexStatus::Ready { .. });
                 state.activity = IndexActivity::Idle(status);
                 if needs_index {
-                    this.queue_index(&id, cx);
+                    this.queue_index(&id, IndexJob::Update, cx);
                 }
                 cx.emit(HubEvent::CorpusChanged(id));
                 cx.notify();
@@ -442,16 +461,20 @@ impl RepoHub {
         }));
     }
 
-    /// Ask for the repository's index to be rebuilt once no other build runs.
-    pub(super) fn queue_index(&mut self, id: &str, cx: &mut Context<Self>) {
+    /// Ask for `job` to be done to the repository's index once no other
+    /// build runs. A rebuild asked for while an update waits replaces it.
+    pub(super) fn queue_index(&mut self, id: &str, job: IndexJob, cx: &mut Context<Self>) {
         if let Some(state) = self.open.get_mut(id)
             && state.index.is_some()
-            && !matches!(
-                state.activity,
-                IndexActivity::Queued | IndexActivity::Building
-            )
         {
-            state.activity = IndexActivity::Queued;
+            match state.activity {
+                IndexActivity::Building => {}
+                IndexActivity::Queued => state.job = state.job.max(job),
+                _ => {
+                    state.activity = IndexActivity::Queued;
+                    state.job = job;
+                }
+            }
         }
         self.start_next_build(cx);
     }
@@ -492,18 +515,34 @@ impl RepoHub {
             return;
         };
         let tracker = state.tracker.clone();
+        // Taken before the build walks the folder: changes made after it may
+        // not be in the new index, so they are kept.
         let mark = tracker.as_ref().map(|tracker| tracker.mark());
         state.activity = IndexActivity::Building;
+        let job = state.job;
         let id = id.to_string();
-        log::info!("building the index of {id}");
+        match job {
+            IndexJob::Update => log::info!("updating the index of {id}"),
+            IndexJob::Rebuild => log::info!("rebuilding the index of {id}"),
+        }
         let started = Instant::now();
         state.index_task = Some(cx.spawn(async move |this, cx| {
             let builder = index.clone();
-            let staged = cx
-                .background_spawn(async move { builder.build_index() })
+            let update = cx
+                .background_spawn(async move {
+                    match job {
+                        IndexJob::Update => builder.update_index(),
+                        IndexJob::Rebuild => {
+                            builder.build_index().map(|staged| IndexUpdate::Rebuilt {
+                                staged,
+                                reason: "a rebuild was asked for".into(),
+                            })
+                        }
+                    }
+                })
                 .await;
-            let staged = match staged {
-                Ok(staged) => staged,
+            let update = match update {
+                Ok(update) => update,
                 Err(error) => {
                     log::error!("indexing {id} failed: {error:#}");
                     metrics().record_index_build(started.elapsed(), false);
@@ -515,6 +554,43 @@ impl RepoHub {
                     })
                     .ok();
                     return;
+                }
+            };
+            let (staged, merged) = match update {
+                IndexUpdate::UpToDate => {
+                    log::info!(
+                        "the index of {id} is up to date, checked in {:.1?}",
+                        started.elapsed()
+                    );
+                    metrics().record_index_update(started.elapsed());
+                    let status = cx
+                        .background_spawn(async move { index.index_status() })
+                        .await;
+                    this.update(cx, |this, cx| {
+                        if let Some(state) = this.open.get_mut(&id) {
+                            if let (Some(tracker), Some(mark)) = (tracker, mark) {
+                                tracker.forget_before(mark);
+                                state.changed_files = tracker.changed_count();
+                            }
+                            state.activity = IndexActivity::Idle(status);
+                        }
+                        this.start_next_build(cx);
+                    })
+                    .ok();
+                    return;
+                }
+                IndexUpdate::Merged { staged, changes } => {
+                    log::info!(
+                        "merging into the index of {id}: {} modified, {} added, {} deleted",
+                        changes.modified,
+                        changes.added,
+                        changes.deleted
+                    );
+                    (staged, true)
+                }
+                IndexUpdate::Rebuilt { staged, reason } => {
+                    log::info!("built the whole index of {id}: {reason}");
+                    (staged, false)
                 }
             };
 
@@ -544,9 +620,14 @@ impl RepoHub {
                     state.corpus = Some(Arc::new(corpus));
                     match &published {
                         Ok(()) => {
-                            metrics().record_index_build(started.elapsed(), true);
+                            if merged {
+                                metrics().record_index_update(started.elapsed());
+                            } else {
+                                metrics().record_index_build(started.elapsed(), true);
+                            }
                             log::info!(
-                                "indexed {id} in {:.1?}: {} files",
+                                "{} {id} in {:.1?}: {} files",
+                                if merged { "updated" } else { "indexed" },
                                 started.elapsed(),
                                 files
                             );
@@ -572,8 +653,8 @@ impl RepoHub {
 
     // ----- keeping current -----------------------------------------------------
 
-    /// Keep change counts and branches current, and re-index repositories
-    /// that changed a lot.
+    /// Keep change counts and branches current, and bring the indexes of
+    /// repositories that changed a lot up to date.
     fn poll(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
@@ -588,7 +669,7 @@ impl RepoHub {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut changed_view = false;
         let mut branch_moved = false;
-        let mut reindex = Vec::new();
+        let mut outdated = Vec::new();
         for (id, state) in &mut self.open {
             let count = state
                 .tracker
@@ -613,13 +694,13 @@ impl RepoHub {
                 state.activity,
                 IndexActivity::Idle(IndexStatus::Ready { .. })
             );
-            if ready && count >= AUTO_REINDEX_CHANGES {
-                log::info!("{count} files changed in {id}; re-indexing");
-                reindex.push(id.clone());
+            if ready && count >= AUTO_UPDATE_CHANGES {
+                log::info!("{count} files changed in {id}; updating its index");
+                outdated.push(id.clone());
             }
         }
-        for id in reindex {
-            self.queue_index(&id, cx);
+        for id in outdated {
+            self.queue_index(&id, IndexJob::Update, cx);
         }
         if branch_moved {
             cx.emit(HubEvent::MetadataChanged);
@@ -661,6 +742,7 @@ impl RepoState {
             },
             index,
             corpus: None,
+            job: IndexJob::default(),
             tracker,
             changed_files: 0,
             users: 0,

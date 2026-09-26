@@ -399,6 +399,7 @@ pub fn metrics_text(metrics: &MetricsSnapshot) -> String {
     timing(&mut out, "cli searches", &metrics.cli_searches);
     timing(&mut out, "index loads", &metrics.index_loads);
     timing(&mut out, "index builds", &metrics.index_builds);
+    timing(&mut out, "index updates", &metrics.index_updates);
     if metrics.index_build_failures > 0 {
         let _ = writeln!(out, "index builds failed: {}", metrics.index_build_failures);
     }
@@ -747,11 +748,11 @@ mod tests {
             lines[2],
             "cli searches          3  p50    8.0 ms  p95   20.0 ms  max     1.5 s"
         );
-        assert_eq!(lines[5], "the indexes spared 97.3% of file reads");
-        assert_eq!(lines[6], "log: 1 error, 2 warnings");
-        assert_eq!(lines[7], "requests: search 3");
+        assert_eq!(lines[6], "the indexes spared 97.3% of file reads");
+        assert_eq!(lines[7], "log: 1 error, 2 warnings");
+        assert_eq!(lines[8], "requests: search 3");
         assert_eq!(
-            lines[9],
+            lines[10],
             "  08:15:42  cli       8.2 ms  read 12/9,000  5 lines in 2 files  \"parse\""
         );
     }

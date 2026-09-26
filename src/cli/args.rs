@@ -190,9 +190,13 @@ pub enum ReposAction {
 pub struct IndexArgs {
     #[command(flatten)]
     pub scope: ScopeArgs,
-    /// Wait until the indexes are built.
+    /// Wait until the indexes are up to date.
     #[arg(long)]
     pub wait: bool,
+    /// Build the indexes again from every file, rather than reading only the
+    /// files that changed.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]

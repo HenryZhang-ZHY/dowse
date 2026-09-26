@@ -16,14 +16,14 @@ use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
 use super::highlight::{self, Highlighters, LineStyles};
-use super::hub::RepoHub;
+use super::hub::{IndexJob, RepoHub};
 use super::repos::TagInputs;
 use super::tabs::SearchTab;
 use super::windows::{Opening, Windows};
 use super::{
     AddRepository, CloseTab, FocusPathFilter, FocusSearch, NewTab, NewWorkspace, NextTab,
     OpenWorkspace, PreviousTab, RebuildIndex, SaveWorkspaceAs, ShowRepositories,
-    ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
+    ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord, UpdateIndex,
 };
 use crate::editor::{self, Launch};
 use dowse::engine::facets::{FacetFilter, FacetKind};
@@ -508,13 +508,22 @@ impl SearchApp {
         self.cycle_tab(false, window, cx);
     }
 
+    pub(super) fn on_update_index(
+        &mut self,
+        _: &UpdateIndex,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.queue_scope_indexes(IndexJob::Update, cx);
+    }
+
     pub(super) fn on_rebuild_index(
         &mut self,
         _: &RebuildIndex,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.queue_scope_indexes(cx);
+        self.queue_scope_indexes(IndexJob::Rebuild, cx);
     }
 
     pub(super) fn on_new_workspace(

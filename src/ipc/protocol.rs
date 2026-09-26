@@ -61,10 +61,13 @@ pub enum Request {
         add: Vec<String>,
         remove: Vec<String>,
     },
-    /// Rebuild the indexes of the repositories in scope.
+    /// Bring the indexes of the repositories in scope up to date, or with
+    /// `full` build them again from every file.
     Index {
         scope: ScopeSpec,
         wait: bool,
+        #[serde(default)]
+        full: bool,
     },
     Status,
     Logs(LogsRequest),

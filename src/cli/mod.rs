@@ -146,6 +146,7 @@ fn execute(command: CliCommand) -> io::Result<i32> {
         CliCommand::Index(index) => Request::Index {
             scope: index.scope.into(),
             wait: index.wait,
+            full: index.full,
         },
         CliCommand::Status(json) => return print_frames(send(Request::Status)?, json.json),
         CliCommand::Quit => {

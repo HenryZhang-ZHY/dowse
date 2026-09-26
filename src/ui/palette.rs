@@ -391,12 +391,20 @@ impl SearchApp {
             .keywords(&["tags", "settings"]),
             command(
                 "Workspace",
-                "Rebuild Indexes in Scope",
+                "Update Indexes in Scope",
+                Lucide::RefreshCw,
+                |this, w, cx| this.on_update_index(&UpdateIndex, w, cx),
+            )
+            .action(UpdateIndex)
+            .keywords(&["reindex", "refresh", "incremental"]),
+            command(
+                "Workspace",
+                "Rebuild Indexes in Scope from Scratch",
                 Lucide::RefreshCw,
                 |this, w, cx| this.on_rebuild_index(&RebuildIndex, w, cx),
             )
             .action(RebuildIndex)
-            .keywords(&["reindex"]),
+            .keywords(&["reindex", "full"]),
             command("Workspace", "New Window", Lucide::AppWindow, |_, _, cx| {
                 Windows::new_window(cx);
             })
