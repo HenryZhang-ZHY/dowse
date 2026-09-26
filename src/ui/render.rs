@@ -14,7 +14,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Selectable as _, Sizable as _,
     StyledExt as _, h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -100,6 +100,9 @@ impl Render for SearchApp {
             .child(self.render_header(cx))
             .child(body)
             .child(self.render_status_bar(cx))
+            // `Root` keeps them, but each view draws them over itself.
+            .children(Root::render_dialog_layer(window, cx))
+            .children(Root::render_notification_layer(window, cx))
     }
 }
 
