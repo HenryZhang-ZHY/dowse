@@ -17,7 +17,7 @@ pub(super) type LineStyles = Vec<(Range<usize>, HighlightStyle)>;
 const PARSE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// The grammar for a language the engine detected (see
-/// [`tgrep_gpui::engine::language::detect`]), when one is bundled.
+/// [`dowse::engine::language::detect`]), when one is bundled.
 pub(super) fn grammar(language: &str) -> Option<&'static str> {
     Some(match language {
         "Rust" => "rust",

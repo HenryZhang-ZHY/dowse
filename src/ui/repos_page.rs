@@ -90,7 +90,7 @@ impl SearchApp {
             .overflow_y_scrollbar()
     }
 
-    /// Offer "Add to tgrep" in Explorer's folder menu, and opening workspace
+    /// Offer "Add to dowse" in Explorer's folder menu, and opening workspace
     /// files with a double click. Windows only.
     fn render_explorer_integration(&self, cx: &Context<Self>) -> Option<AnyElement> {
         #[cfg(windows)]
@@ -104,15 +104,15 @@ impl SearchApp {
             let (label, detail) = match state {
                 State::Missing => (
                     "Add to Explorer",
-                    "Right-click a folder in Explorer and choose \"Add to tgrep\" to add it to the last focused window, as tgrep-gpui --add does. Workspace files open with a double click.",
+                    "Right-click a folder in Explorer and choose \"Add to dowse\" to add it to the last focused window, as dowse --add does. Workspace files open with a double click.",
                 ),
                 State::Installed => (
                     "Remove from Explorer",
-                    "Explorer offers \"Add to tgrep\" on folders, and opens workspace files with a double click.",
+                    "Explorer offers \"Add to dowse\" on folders, and opens workspace files with a double click.",
                 ),
                 State::Elsewhere => (
                     "Point Explorer here",
-                    "Explorer's \"Add to tgrep\" starts another copy of tgrep-gpui.",
+                    "Explorer's \"Add to dowse\" starts another copy of dowse.",
                 ),
             };
             Some(

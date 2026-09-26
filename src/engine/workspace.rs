@@ -1,4 +1,4 @@
-//! Saved workspaces: `.tgrep-workspace` files listing the repositories a
+//! Saved workspaces: `.dowse-workspace` files listing the repositories a
 //! window searches, in the spirit of VS Code's `.code-workspace`.
 //!
 //! ```json
@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use super::{repo, store};
 
 /// The extension of saved workspace files.
-pub const EXTENSION: &str = "tgrep-workspace";
+pub const EXTENSION: &str = "dowse-workspace";
+/// The extension used before the app was renamed from tgrep-gpui; such
+/// files still open.
+pub const LEGACY_EXTENSION: &str = "tgrep-workspace";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct WorkspaceFile {
@@ -76,7 +79,7 @@ pub fn name(file: &Path) -> String {
 /// Whether `path` names a workspace file rather than a folder.
 pub fn is_workspace_file(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|extension| extension == EXTENSION)
+        .is_some_and(|extension| extension == EXTENSION || extension == LEGACY_EXTENSION)
         && !path.is_dir()
 }
 
@@ -93,7 +96,7 @@ mod tests {
         let outside = repo::identity(outside.path());
         std::fs::create_dir_all(&inside).unwrap();
 
-        let file = root.join("team.tgrep-workspace");
+        let file = root.join("team.dowse-workspace");
         save(&file, &[inside.clone(), outside.clone()]).unwrap();
 
         let text = std::fs::read_to_string(&file).unwrap();
@@ -101,6 +104,7 @@ mod tests {
         assert_eq!(load(&file).unwrap(), vec![inside, outside]);
         assert_eq!(name(&file), "team");
         assert!(is_workspace_file(&file));
+        assert!(is_workspace_file(&root.join("old.tgrep-workspace")));
         assert!(!is_workspace_file(&root));
     }
 
@@ -109,7 +113,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = repo::identity(dir.path());
         std::fs::create_dir_all(root.join("api")).unwrap();
-        let file = root.join("w.tgrep-workspace");
+        let file = root.join("w.dowse-workspace");
         std::fs::write(
             &file,
             r#"{ "folders": [ { "path": "api" }, { "path": "./api/" }, { "path": "missing" } ] }"#,
@@ -124,7 +128,7 @@ mod tests {
     #[test]
     fn a_missing_or_corrupt_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("w.tgrep-workspace");
+        let file = dir.path().join("w.dowse-workspace");
         assert!(load(&file).is_err());
         std::fs::write(&file, "nope").unwrap();
         assert!(load(&file).is_err());

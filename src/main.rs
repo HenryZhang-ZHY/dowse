@@ -25,7 +25,7 @@ fn main() {
         Ok(command) => command,
         Err(error) => {
             attach_console();
-            eprintln!("tgrep-gpui: {error}");
+            eprintln!("dowse: {error}");
             std::process::exit(2);
         }
     };

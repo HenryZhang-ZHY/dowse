@@ -20,9 +20,9 @@ use super::table::ResultsView;
 use super::windows::Windows;
 use super::*;
 use crate::fuzzy;
-use tgrep_gpui::engine::repo;
-use tgrep_gpui::engine::table::ExportFormat;
-use tgrep_gpui::engine::workspace;
+use dowse::engine::repo;
+use dowse::engine::table::ExportFormat;
+use dowse::engine::workspace;
 
 /// Commands listed when nothing is typed, and at most when something is.
 const MAX_MATCHES: usize = 60;

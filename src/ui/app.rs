@@ -25,10 +25,10 @@ use super::{
     ToggleCaseSensitive, ToggleRegex, ToggleTheme, ToggleWholeWord,
 };
 use crate::editor::{self, Launch};
-use tgrep_gpui::engine::facets::{FacetFilter, FacetKind};
-use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
-use tgrep_gpui::engine::repo::Scope;
-use tgrep_gpui::engine::search::{self, SearchLimits};
+use dowse::engine::facets::{FacetFilter, FacetKind};
+use dowse::engine::query::{CompiledQuery, SearchQuery};
+use dowse::engine::repo::Scope;
+use dowse::engine::search::{self, SearchLimits};
 
 /// Pause after a keystroke before searching, so typing a word runs one search.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);

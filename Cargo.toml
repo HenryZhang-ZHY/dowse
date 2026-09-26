@@ -1,12 +1,12 @@
 [package]
-name = "tgrep-gpui"
+name = "dowse"
 version = "0.1.0"
 edition = "2024"
-description = "A cross-platform desktop code search tool powered by tgrep and GPUI"
+description = "Search code across many repositories, from a desktop app or the command line"
 license = "MIT"
 
 [[bin]]
-name = "tgrep-gpui"
+name = "dowse"
 path = "src/main.rs"
 
 [dependencies]

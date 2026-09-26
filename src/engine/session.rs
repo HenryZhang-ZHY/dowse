@@ -86,7 +86,7 @@ mod tests {
         let mut session = Session {
             windows: vec![
                 WindowSession {
-                    workspace: Some("/w/team.tgrep-workspace".into()),
+                    workspace: Some("/w/team.dowse-workspace".into()),
                     repos: vec![],
                     scope: vec!["dev".into()],
                     tabs: vec![
@@ -113,7 +113,7 @@ mod tests {
         };
         session
             .scopes
-            .insert("/w/team.tgrep-workspace".into(), vec!["dev".into()]);
+            .insert("/w/team.dowse-workspace".into(), vec!["dev".into()]);
         session.save(&file).unwrap();
         assert_eq!(Session::load(&file).unwrap(), session);
     }

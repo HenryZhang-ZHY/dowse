@@ -22,9 +22,9 @@ use super::highlight::{self, LineStyles};
 use super::render::{centered_message, code_text};
 use super::{ClosePreview, NextMatch, PreviousMatch};
 use crate::format;
-use tgrep_gpui::engine::preview::{self, FilePreview};
-use tgrep_gpui::engine::repo::RepoInfo;
-use tgrep_gpui::engine::search::FileMatch;
+use dowse::engine::preview::{self, FilePreview};
+use dowse::engine::repo::RepoInfo;
+use dowse::engine::search::FileMatch;
 
 const LINE_NUMBER_WIDTH: f32 = 64.;
 

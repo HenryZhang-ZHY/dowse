@@ -69,7 +69,7 @@ fn listen(id: &str) -> io::Result<async_channel::Receiver<Command>> {
         .create_sync()?;
     let (sender, receiver) = async_channel::unbounded();
     std::thread::Builder::new()
-        .name("tgrep-gpui instance".into())
+        .name("dowse instance".into())
         .spawn(move || {
             for stream in listener.incoming().filter_map(Result::ok) {
                 let mut stream = BufReader::new(stream);
@@ -97,7 +97,7 @@ fn socket_id(config_root: &Path) -> String {
         .unwrap_or_default();
     let root = config_root.to_string_lossy().to_lowercase();
     format!(
-        "tgrep-gpui-{:016x}.sock",
+        "dowse-{:016x}.sock",
         fnv1a(format!("{user}\n{root}").as_bytes())
     )
 }
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn a_second_launch_hands_its_command_to_the_first() {
-        let id = format!("tgrep-gpui-test-{}.sock", std::process::id());
+        let id = format!("dowse-test-{}.sock", std::process::id());
         let Launch::Primary(commands) = claim_named(&id, &Command::Start) else {
             panic!("the first launch should run the app");
         };

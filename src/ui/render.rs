@@ -28,11 +28,11 @@ use super::table::ResultsView;
 use super::tabs::file_key;
 use super::windows::Windows;
 use crate::format;
-use tgrep_gpui::engine::facets::FacetKind;
-use tgrep_gpui::engine::repo::{self, BRANCH_GROUP};
-use tgrep_gpui::engine::search::{FileMatch, Snippet, SnippetLine};
-use tgrep_gpui::engine::table::ExportFormat;
-use tgrep_gpui::engine::workspace;
+use dowse::engine::facets::FacetKind;
+use dowse::engine::repo::{self, BRANCH_GROUP};
+use dowse::engine::search::{FileMatch, Snippet, SnippetLine};
+use dowse::engine::table::ExportFormat;
+use dowse::engine::workspace;
 
 /// Matching lines shown per file before "Show more".
 const COLLAPSED_MATCH_LINES: usize = 6;
@@ -185,7 +185,7 @@ impl SearchApp {
                     .gap_1p5()
                     .cursor_pointer()
                     .child(Icon::new(Lucide::TextSearch).text_color(theme.primary))
-                    .child(div().font_semibold().child("tgrep"))
+                    .child(div().font_semibold().child("dowse"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.show_page(Page::Search, window, cx)),
                     ),
@@ -1317,7 +1317,7 @@ impl SearchApp {
                     .max_w(px(560.))
                     .text_center()
                     .text_color(muted)
-                    .child("Add the repositories you work with. Each gets a trigram index in its .tgrep directory, shared with the tgrep CLI. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
+                    .child("Add the repositories you work with. Each gets a trigram index in its .tgrep directory, shared with the tgrep command-line tool. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
             )
             .child(
                 h_flex()

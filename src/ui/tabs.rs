@@ -15,9 +15,9 @@ use super::app::{SearchApp, SnippetSyntax};
 use super::preview::Preview;
 use super::table::{ResultsView, TableView};
 use super::windows::Windows;
-use tgrep_gpui::engine::facets::{FacetFilter, Facets};
-use tgrep_gpui::engine::query::SearchQuery;
-use tgrep_gpui::engine::search::{FileMatch, SearchOutcome};
+use dowse::engine::facets::{FacetFilter, Facets};
+use dowse::engine::query::SearchQuery;
+use dowse::engine::search::{FileMatch, SearchOutcome};
 
 /// Characters of the query shown on a tab.
 const TAB_LABEL_CHARS: usize = 24;

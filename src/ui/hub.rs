@@ -13,11 +13,11 @@ use std::time::{Duration, SystemTime};
 use gpui_kit::*;
 
 use crate::format;
-use tgrep_gpui::engine::index::{Corpus, IndexStatus, RepoIndex};
-use tgrep_gpui::engine::library::{Library, LibraryEntry};
-use tgrep_gpui::engine::repo::{self, RepoInfo};
-use tgrep_gpui::engine::search::SearchSource;
-use tgrep_gpui::engine::watch::ChangeTracker;
+use dowse::engine::index::{Corpus, IndexStatus, RepoIndex};
+use dowse::engine::library::{Library, LibraryEntry};
+use dowse::engine::repo::{self, RepoInfo};
+use dowse::engine::search::SearchSource;
+use dowse::engine::watch::ChangeTracker;
 
 /// How often change counts and checked-out branches are refreshed.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);

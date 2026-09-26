@@ -12,7 +12,7 @@ use super::app::SearchApp;
 use super::render::match_style;
 use super::{CopyResultsAsMarkdown, CopyResultsAsTsv, ExportResults, ToggleResultsView};
 use crate::format;
-use tgrep_gpui::engine::table::{ColumnKind, ExportFormat, ResultTable, TableRow};
+use dowse::engine::table::{ColumnKind, ExportFormat, ResultTable, TableRow};
 
 /// How a tab shows its results.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -307,7 +307,7 @@ impl SearchApp {
         let directory = dirs::download_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir);
-        let suggested = format!("tgrep-results.{}", format.extension());
+        let suggested = format!("dowse-results.{}", format.extension());
         let chosen = cx.prompt_for_new_path(&directory, Some(&suggested));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(file))) = chosen.await else {

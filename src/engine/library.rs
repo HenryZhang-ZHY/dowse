@@ -1,4 +1,4 @@
-//! Every repository tgrep-gpui knows, with its display name and tags. A
+//! Every repository dowse knows, with its display name and tags. A
 //! repository's tags describe the clone itself (a mirror, a dev copy, its
 //! owner), so they are kept here once rather than in each workspace.
 

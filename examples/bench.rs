@@ -4,10 +4,10 @@
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use tgrep_gpui::engine::index::{IndexStatus, RepoIndex};
-use tgrep_gpui::engine::query::{CompiledQuery, SearchQuery};
-use tgrep_gpui::engine::repo::RepoInfo;
-use tgrep_gpui::engine::search::{self, SearchLimits, SearchSource};
+use dowse::engine::index::{IndexStatus, RepoIndex};
+use dowse::engine::query::{CompiledQuery, SearchQuery};
+use dowse::engine::repo::RepoInfo;
+use dowse::engine::search::{self, SearchLimits, SearchSource};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);

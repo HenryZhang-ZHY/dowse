@@ -1,4 +1,4 @@
-//! Reading and writing the small JSON files tgrep-gpui keeps.
+//! Reading and writing the small JSON files dowse keeps.
 
 use std::path::Path;
 

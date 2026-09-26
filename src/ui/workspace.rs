@@ -1,4 +1,4 @@
-//! A window's workspace: untitled or saved to a `.tgrep-workspace` file,
+//! A window's workspace: untitled or saved to a `.dowse-workspace` file,
 //! switching to another one, saving it, and asking before an untitled one
 //! with repositories is thrown away.
 
@@ -10,9 +10,9 @@ use gpui_kit::*;
 
 use super::app::SearchApp;
 use super::windows::{Opening, Windows};
-use tgrep_gpui::engine::repo::{self, Scope};
-use tgrep_gpui::engine::session::WindowSession;
-use tgrep_gpui::engine::workspace;
+use dowse::engine::repo::{self, Scope};
+use dowse::engine::session::WindowSession;
+use dowse::engine::workspace;
 
 impl SearchApp {
     /// The saved workspace this window shows, or `None` for an untitled one.
@@ -101,7 +101,7 @@ impl SearchApp {
     }
 
     pub(super) fn update_title(&self, window: &mut Window) {
-        window.set_window_title(&format!("{} — tgrep", self.workspace_name()));
+        window.set_window_title(&format!("{} — dowse", self.workspace_name()));
     }
 
     /// Write the repository list where this workspace keeps it: its file, or

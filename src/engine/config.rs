@@ -1,9 +1,9 @@
-//! Where tgrep-gpui keeps its settings, and moving settings from earlier
+//! Where dowse keeps its settings, and moving settings from earlier
 //! versions forward.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use super::library::{Library, LibraryEntry};
 use super::registry::Registry;
@@ -44,6 +44,48 @@ impl ConfigDir {
     /// scope here.
     fn legacy_registry_file(&self) -> PathBuf {
         self.root.join("repos.json")
+    }
+
+    /// Take over the settings the app kept under its earlier name,
+    /// tgrep-gpui, when there are none here yet: the folder moves here, and
+    /// the session's references to workspaces saved inside it follow.
+    /// Returns whether anything was adopted.
+    pub fn adopt_legacy(&self, legacy: &Path) -> Result<bool> {
+        if self.root.exists() || !legacy.is_dir() {
+            return Ok(false);
+        }
+        if let Some(parent) = self.root.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(legacy, &self.root).with_context(|| {
+            format!(
+                "could not move {} to {}",
+                legacy.display(),
+                self.root.display()
+            )
+        })?;
+        let file = self.session_file();
+        if file.exists() {
+            let mut session = Session::load(&file)?;
+            let moved = |path: &mut PathBuf| {
+                if let Ok(relative) = path.strip_prefix(legacy) {
+                    *path = self.root.join(relative);
+                }
+            };
+            for window in &mut session.windows {
+                window.workspace.as_mut().map(moved);
+            }
+            session.recent.iter_mut().for_each(moved);
+            session.scopes = std::mem::take(&mut session.scopes)
+                .into_iter()
+                .map(|(mut path, scope)| {
+                    moved(&mut path);
+                    (path, scope)
+                })
+                .collect();
+            session.save(&file)?;
+        }
+        Ok(true)
     }
 
     /// Carry an earlier version's repository list forward, once: its
@@ -128,6 +170,41 @@ mod tests {
         assert!(!config.migrate().unwrap());
         assert_eq!(Session::load(&config.session_file()).unwrap(), session);
         assert!(dir.path().join("repos.json").exists());
+    }
+
+    #[test]
+    fn adopts_the_settings_of_tgrep_gpui() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("tgrep-gpui");
+        let saved = legacy.join("workspaces").join("team.tgrep-workspace");
+        workspace::save(&saved, &[]).unwrap();
+        let elsewhere = dir.path().join("elsewhere.tgrep-workspace");
+        let mut session = Session::default();
+        session.windows.push(WindowSession {
+            workspace: Some(saved.clone()),
+            ..Default::default()
+        });
+        session.remember(&elsewhere);
+        session.remember(&saved);
+        session.scopes.insert(saved.clone(), vec!["dev".into()]);
+        session.save(&legacy.join("session.json")).unwrap();
+        Library::default().save(&legacy.join("library.json")).unwrap();
+
+        let config = ConfigDir::new(dir.path().join("dowse"));
+        assert!(config.adopt_legacy(&legacy).unwrap());
+        assert!(!legacy.exists());
+        assert!(config.library_file().exists());
+
+        let moved = config.workspaces_dir().join("team.tgrep-workspace");
+        assert!(moved.exists());
+        let session = Session::load(&config.session_file()).unwrap();
+        assert_eq!(session.windows[0].workspace, Some(moved.clone()));
+        assert_eq!(session.recent, vec![moved.clone(), elsewhere]);
+        assert_eq!(session.scopes.get(&moved), Some(&vec!["dev".to_string()]));
+
+        // Once there are settings of its own, nothing is adopted.
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert!(!config.adopt_legacy(&legacy).unwrap());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Opening a search hit in the user's editor.
 //!
-//! `TGREP_GPUI_EDITOR` picks the command, with `{file}` and `{line}`
+//! `DOWSE_EDITOR` picks the command, with `{file}` and `{line}`
 //! placeholders, for example `code -g {file}:{line}` or `nvim-qt +{line} {file}`.
 //! Without it, the first editor found on `PATH` among VS Code, Cursor, Zed and
 //! Sublime Text is used, and failing that the system's default application.
@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const EDITOR_ENV: &str = "TGREP_GPUI_EDITOR";
+pub const EDITOR_ENV: &str = "DOWSE_EDITOR";
 
 /// How to open a file at a line.
 #[derive(Debug, PartialEq, Eq)]
@@ -30,7 +30,7 @@ const KNOWN_EDITORS: &[(&str, &[&str])] = &[
 ];
 
 pub fn resolve(file: &Path, line: usize) -> Launch {
-    let file = tgrep_gpui::engine::index::display_path(file);
+    let file = dowse::engine::index::display_path(file);
     if let Ok(template) = std::env::var(EDITOR_ENV)
         && let Some(launch) = from_template(&template, &file, line)
     {

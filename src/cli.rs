@@ -1,9 +1,9 @@
 //! The command line, modelled on VS Code's `code`:
 //!
-//! - `tgrep-gpui` restores the last session.
-//! - `tgrep-gpui <folder>...` opens the folders as a new untitled workspace;
-//!   a `.tgrep-workspace` file opens that workspace.
-//! - `tgrep-gpui --add <folder>...` adds the folders to the last focused
+//! - `dowse` restores the last session.
+//! - `dowse <folder>...` opens the folders as a new untitled workspace;
+//!   a `.dowse-workspace` file opens that workspace.
+//! - `dowse --add <folder>...` adds the folders to the last focused
 //!   window's workspace; `--remove` takes them out.
 //!
 //! A folder holding several git repositories stands for all of them.
@@ -13,16 +13,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use tgrep_gpui::engine::workspace;
+use dowse::engine::workspace;
 
 pub const USAGE: &str = "\
-Usage: tgrep-gpui [OPTIONS] [PATH...]
+Usage: dowse [OPTIONS] [PATH...]
 
 Search code across many repositories.
 
   PATH                  Folders open as a new untitled workspace; a folder
                         holding git repositories adds each of them. A
-                        .tgrep-workspace file opens that workspace.
+                        .dowse-workspace file opens that workspace.
 
 Options:
   -a, --add <FOLDER>...     Add folders to the last focused window's workspace
@@ -111,10 +111,10 @@ mod tests {
         assert_eq!(run(&[]), Ok(Command::Start));
         assert_eq!(run(&["-h"]), Ok(Command::Help));
         assert_eq!(
-            run(&["api", "/abs/web", "team.tgrep-workspace"]),
+            run(&["api", "/abs/web", "team.dowse-workspace"]),
             Ok(Command::Open {
                 folders: vec!["/cwd/api".into(), "/abs/web".into()],
-                workspaces: vec!["/cwd/team.tgrep-workspace".into()],
+                workspaces: vec!["/cwd/team.dowse-workspace".into()],
             })
         );
         assert_eq!(

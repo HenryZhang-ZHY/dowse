@@ -1,11 +1,15 @@
-# tgrep-gpui
+# dowse
 
-A cross-platform desktop code search tool: [tgrep](https://github.com/microsoft/tgrep)'s
-trigram index as the engine, [GPUI](https://github.com/zed-industries/zed) (through
-[GPUI Kit](https://gpui-kit.com)) as the UI. It searches across many repositories at
-once, in the spirit of [grep.app](https://grep.app) and GitHub code search, but over
+Search code across many repositories at once, from a desktop app or the command
+line, in the spirit of [grep.app](https://grep.app) and GitHub code search, but over
 the clones on your own disk: the mirrors you keep on `main` and the working copies
-you develop in.
+you develop in. [tgrep](https://github.com/microsoft/tgrep)'s trigram index is the
+engine and [GPUI](https://github.com/zed-industries/zed) (through
+[GPUI Kit](https://gpui-kit.com)) the UI.
+
+dowse was called tgrep-gpui until it outgrew being a window around tgrep. The first
+start after the rename moves tgrep-gpui's settings over; `.tgrep-workspace` files
+still open, and each repository keeps its `.tgrep` index.
 
 ## Features
 
@@ -13,15 +17,15 @@ you develop in.
   that holds several git repositories to add them all. Results show which repository
   and branch each file comes from.
 - **Workspaces, like VS Code's.** Each window shows a workspace: the repositories it
-  searches. A new one is untitled; save it as a `.tgrep-workspace` file to reopen or
+  searches. A new one is untitled; save it as a `.dowse-workspace` file to reopen or
   share it, and later changes are written back to the file. Open as many windows as
   you like; windows sharing a repository share its index and file watcher. The open
   windows, untitled workspaces included, come back on the next start. Closing a
   window with an unsaved workspace, while others stay open, asks whether to save it.
 - **Add from anywhere.** Drop folders on a window to add them, or a workspace file to
-  open it. From a terminal, `tgrep-gpui --add <folder>` adds to the running app's last
+  open it. From a terminal, `dowse --add <folder>` adds to the running app's last
   focused window, like `code --add`. On Windows, the repositories page can add "Add to
-  tgrep" to Explorer's folder menu, which does the same, and open workspace files with
+  dowse" to Explorer's folder menu, which does the same, and open workspace files with
   a double click; this writes to the current user's registry only when you ask.
 - **Tags choose what to search.** Tag repositories freely: plain tags such as `mirror`
   or `dev`, or `key:value` tags such as `owner:alice` or `project:billing`. Every
@@ -85,7 +89,7 @@ you develop in.
 - **Open in your editor** from the preview's "Open in Editor" button (at the chosen
   line), by double-clicking a line there, or straight from the results with
   `Ctrl+Click`. VS Code, Cursor, Zed or Sublime Text is used when found on `PATH`,
-  otherwise the system default application. Set `TGREP_GPUI_EDITOR` to choose, for
+  otherwise the system default application. Set `DOWSE_EDITOR` to choose, for
   example `code -g {file}:{line}` or `nvim-qt +{line} {file}`.
 - **Shares indexes with the tgrep CLI**. Each repository's index lives in its
   `.tgrep` directory, the same place `tgrep index` and `tgrep serve` use. A repository
@@ -118,23 +122,23 @@ The command line follows VS Code's `code`:
 
 | Command | What it does |
 | --- | --- |
-| `tgrep-gpui` | Restores the last session's windows. |
-| `tgrep-gpui <folder>...` | Opens the folders as a new untitled workspace. A folder holding git repositories stands for each of them. |
-| `tgrep-gpui <file>.tgrep-workspace` | Opens that workspace, or focuses the window already showing it. |
-| `tgrep-gpui --add <folder>...` | Adds the folders to the last focused window's workspace. |
-| `tgrep-gpui --remove <folder>...` | Takes them out again. |
+| `dowse` | Restores the last session's windows. |
+| `dowse <folder>...` | Opens the folders as a new untitled workspace. A folder holding git repositories stands for each of them. |
+| `dowse <file>.dowse-workspace` | Opens that workspace, or focuses the window already showing it. |
+| `dowse --add <folder>...` | Adds the folders to the last focused window's workspace. |
+| `dowse --remove <folder>...` | Takes them out again. |
 
-As with `code`, only one tgrep-gpui runs at a time: a launch while it is running hands
+As with `code`, only one dowse runs at a time: a launch while it is running hands
 its command line to the running app and exits at once, and a launch without arguments
 opens a new window there. Each settings directory (see below) gets its own app.
 
-Settings live under the user configuration directory (`%APPDATA%\tgrep-gpui` on
-Windows, `~/.config/tgrep-gpui` on Linux, `~/Library/Application Support/tgrep-gpui`
+Settings live under the user configuration directory (`%APPDATA%\dowse` on
+Windows, `~/.config/dowse` on Linux, `~/Library/Application Support/dowse`
 on macOS): `library.json` holds every repository's name and tags, `session.json` the
 windows to restore and recent workspaces, and `workspaces/` is where workspaces are
 saved unless you pick elsewhere. The first start after upgrading from a version with
 a single repository list (`repos.json`) turns that list into a saved "Default"
-workspace. Set `TGREP_GPUI_CONFIG_DIR` to keep settings elsewhere.
+workspace. Set `DOWSE_CONFIG_DIR` to keep settings elsewhere.
 
 On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see the
 [Zed Linux build notes](https://github.com/zed-industries/zed/blob/main/docs/src/development/linux.md).

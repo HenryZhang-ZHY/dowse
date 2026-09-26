@@ -14,8 +14,8 @@ use gpui_kit::*;
 use super::app::SearchApp;
 use super::hub::{HubEvent, RepoHub, RepoView};
 use super::windows::Windows;
-use tgrep_gpui::engine::repo::{self, RepoInfo};
-use tgrep_gpui::engine::search::SearchSource;
+use dowse::engine::repo::{self, RepoInfo};
+use dowse::engine::search::SearchSource;
 
 /// A repository's tag input on the repositories page.
 pub(super) struct TagInput {

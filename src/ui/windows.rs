@@ -10,9 +10,9 @@ use gpui_kit::*;
 use super::app::{SearchApp, TabsOpening};
 use super::hub::RepoHub;
 use crate::cli::Command;
-use tgrep_gpui::engine::config::ConfigDir;
-use tgrep_gpui::engine::repo;
-use tgrep_gpui::engine::session::{Session, WindowSession};
+use dowse::engine::config::ConfigDir;
+use dowse::engine::repo;
+use dowse::engine::session::{Session, WindowSession};
 
 /// How far each new window is offset from the previous one.
 const CASCADE: f32 = 28.;
@@ -72,6 +72,11 @@ impl Windows {
     pub(super) fn init(root: PathBuf, cx: &mut App) {
         let config = ConfigDir::new(root);
         let mut startup_errors = Vec::new();
+        if let Some(legacy) = super::legacy_config_root()
+            && let Err(error) = config.adopt_legacy(&legacy)
+        {
+            startup_errors.push(format!("Could not carry over tgrep-gpui's settings: {error:#}"));
+        }
         if let Err(error) = config.migrate() {
             startup_errors.push(format!("Could not carry over your repositories: {error:#}"));
         }
@@ -234,7 +239,7 @@ impl Windows {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("tgrep".into()),
+                title: Some("dowse".into()),
                 ..Default::default()
             }),
             window_min_size: Some(size(px(720.), px(480.))),
