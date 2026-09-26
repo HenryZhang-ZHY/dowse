@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use tgrep_core::gitignore::{self, IgnoreMatcher};
 use tgrep_core::walker::{self, WalkOptions};
@@ -105,12 +106,20 @@ impl State {
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
+        // Only a directory that appeared, or was renamed in, brings files of
+        // its own. Other events on a directory, such as Windows reporting one
+        // whose entries changed, would otherwise mark all of its files.
+        let arrived = matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+        );
         let mut found = Vec::new();
         for path in &event.paths {
             if path.is_dir() {
-                // A directory appeared (or was renamed in): pick up its files.
-                let walk = walker::walk_dir(path, &WalkOptions::default());
-                found.extend(walk.files.iter().filter_map(|file| self.accept(file)));
+                if arrived {
+                    let walk = walker::walk_dir(path, &WalkOptions::default());
+                    found.extend(walk.files.iter().filter_map(|file| self.accept(file)));
+                }
             } else if let Some(relative) = self.accept(path) {
                 found.push(relative);
             }
@@ -181,6 +190,28 @@ mod tests {
         let mark = tracker.mark();
         tracker.forget_before(mark);
         assert_eq!(tracker.changed_count(), 0);
+    }
+
+    #[test]
+    fn a_change_inside_a_directory_does_not_mark_its_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/old.rs"), "fn old() {}\n").unwrap();
+        let tracker = ChangeTracker::start(&root).unwrap();
+        tracker.state.ignore_matcher();
+        std::thread::sleep(Duration::from_millis(200));
+
+        std::fs::write(root.join("src/new.rs"), "fn new() {}\n").unwrap();
+        std::fs::create_dir_all(root.join("moved/deep")).unwrap();
+        std::fs::write(root.join("moved/deep/a.rs"), "fn a() {}\n").unwrap();
+        wait_for(&tracker, &["src/new.rs", "moved/deep/a.rs"]);
+        // Give the directories' own events time to arrive too.
+        std::thread::sleep(Duration::from_millis(300));
+        let paths = tracker.changed_paths();
+        assert!(paths.contains(&"src/new.rs".to_string()), "{paths:?}");
+        assert!(paths.contains(&"moved/deep/a.rs".to_string()), "{paths:?}");
+        assert!(!paths.contains(&"src/old.rs".to_string()), "{paths:?}");
     }
 
     #[test]
