@@ -97,9 +97,21 @@ still open, and each repository keeps its `.tgrep` index.
   files are scanned.
 - **Stays fresh between builds**. A file watcher per repository tracks files changed
   since its last build, and searches read them directly, so a `git pull` in a mirror
-  or an edit in a working copy shows up right away. After 2,000 changes a repository is
-  re-indexed automatically. Rebuilds happen in a staging directory, so searching keeps
-  working while one runs.
+  or an edit in a working copy shows up right away. Opening a repository also finds
+  the files modified since its index was built, while dowse was not running. After
+  2,000 changes a repository is re-indexed automatically. Rebuilds happen in a staging
+  directory, so searching keeps working while one runs.
+- **A command line for people and agents.** `dowse search`, `dowse repos` and the
+  other subcommands drive the running app, as Obsidian's command line does, so they
+  share its warm indexes and file watchers; when the app is not running, the first
+  command starts it in the background, without windows. Output is made for coding
+  agents as much as for people: see [the command line](#the-command-line) below.
+- **Developer tools**: `Ctrl+Shift+I` or `F12` opens a window with the app's log as
+  it is written (filtered by level and text), its key metrics (memory, search
+  timings from windows and the command line, how many file reads the indexes spared,
+  index load and build timings, log problems) and the latest searches with what each
+  read and found. Copy Diagnostics puts it all on the clipboard. The command line
+  reads the same with `dowse dev logs` and `dowse dev metrics`.
 - **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works) lists
   every command with its shortcut, plus the open tabs, the scope's tags, recent
   workspaces and the query qualifiers, which it adds to the query. Type a few letters
@@ -108,7 +120,8 @@ still open, and each repository keeps its `.tgrep` index.
 - Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
   page, `Ctrl+F` focuses the search box, `Ctrl+P` the path filter, and
   `Ctrl+Shift+R` rebuilds the indexes in scope. `Ctrl+Shift+N` opens a new window,
-  `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one.
+  `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one. `Ctrl+Shift+I` or
+  `F12` opens the developer tools.
 
 ## Build and run
 
@@ -118,7 +131,7 @@ Requires a recent stable Rust (the repository's `mise.toml` pins `latest`).
 cargo run --release -- path/to/repo path/to/folder-of-repos
 ```
 
-The command line follows VS Code's `code`:
+Launching the app follows VS Code's `code`:
 
 | Command | What it does |
 | --- | --- |
@@ -132,13 +145,67 @@ As with `code`, only one dowse runs at a time: a launch while it is running hand
 its command line to the running app and exits at once, and a launch without arguments
 opens a new window there. Each settings directory (see below) gets its own app.
 
+On Windows the app is a GUI program, which a terminal neither waits for nor shows
+output from. Install the console program Cargo builds as `dowse-cli.exe` next to
+it as `dowse.com`; terminals prefer `.com` to `.exe`, so `dowse` in a terminal runs
+the command line, which hands launches to `dowse.exe`, while Explorer runs the app:
+
+```powershell
+cargo build --release
+Copy-Item target\release\dowse-cli.exe target\release\dowse.com
+```
+
+On macOS and Linux the `dowse` binary is both.
+
 Settings live under the user configuration directory (`%APPDATA%\dowse` on
 Windows, `~/.config/dowse` on Linux, `~/Library/Application Support/dowse`
 on macOS): `library.json` holds every repository's name and tags, `session.json` the
-windows to restore and recent workspaces, and `workspaces/` is where workspaces are
-saved unless you pick elsewhere. The first start after upgrading from a version with
-a single repository list (`repos.json`) turns that list into a saved "Default"
-workspace. Set `DOWSE_CONFIG_DIR` to keep settings elsewhere.
+windows to restore and recent workspaces, `workspaces/` is where workspaces are
+saved unless you pick elsewhere, and `logs/dowse.log` is the log (it starts over
+past 5 MB, keeping the previous one as `dowse.old.log`; `DOWSE_LOG=debug` records
+more). The first start after upgrading from a version with a single repository
+list (`repos.json`) turns that list into a saved "Default" workspace. Set
+`DOWSE_CONFIG_DIR` to keep settings elsewhere.
+
+## The command line
+
+| Command | What it does |
+| --- | --- |
+| `dowse search <query>` | Searches every repository dowse knows, in the query syntax above. `--here`, `-t <tag>` and `-W <workspace>` narrow the scope. |
+| `dowse repos` | Lists the repositories with branch, index state, file count, when they were indexed and tags. |
+| `dowse repos add <folder>... [-t <tag>]` | Adds repositories, or every repository in a folder, to the library. |
+| `dowse repos tag <repo> <tag>... [-r <tag>]` | Adds tags to a repository, or removes them. |
+| `dowse index [--wait]` | Rebuilds the indexes in scope. |
+| `dowse status` | Shows the running app: windows, repositories, indexing, where its settings and log are. |
+| `dowse dev logs [-f] [--level debug]` | Prints the app's latest log records, or follows them. |
+| `dowse dev metrics` | Prints the app's key metrics and latest searches. |
+| `dowse dev open` | Opens the developer tools window. |
+| `dowse quit` | Quits the app. |
+| `dowse guide` | Prints [the guide for coding agents](docs/agent-guide.md). |
+
+Every subcommand is a request to the running app over its single-instance socket;
+the app answers with data and the command line formats it. With no window open,
+an app the command line started quits after ten minutes without requests, and
+repositories opened for requests stay open that long, so an agent's next query is
+fast too.
+
+Results are shaped for agents as much as for people, following what makes tgrep
+work well for them:
+
+- Results go to stdout; counts, timings, notes and suggestions go to stderr. Exit
+  status is 0 when something matched, 1 when nothing did and 2 on error. Unknown
+  options are errors, and a mistyped subcommand is reported with the one meant.
+- Text output is compact: each file's absolute path with its repository and branch,
+  then `line:text` (with `-C`, context as `line-text`). `-l` prints paths only, `-c`
+  paths with counts, `-q` nothing.
+- Output has a budget: 100 matching lines (`-n`) and 20 per file (`-m`), with the
+  totals in the footer. When results are cut, the footer suggests the qualifiers
+  that would narrow them, from the facets, with how many files each keeps:
+  `narrow with: repo:api (120)  language:Rust (80)  path:src/** (64)`.
+- `--json` prints one object per line: a `file` per matching file, then a
+  `summary` with counts, timings, facets and the narrowing suggestions.
+  `--table csv|tsv|md|json` prints the table view's rows, with a column per capture
+  group, and `--stats` how the indexes narrowed the search.
 
 On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see the
 [Zed Linux build notes](https://github.com/zed-industries/zed/blob/main/docs/src/development/linux.md).
@@ -147,10 +214,14 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`). |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language. |
-| `src/cli.rs` | The command line. |
-| `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`) and tgrep-gpui's settings. |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
+| `src/cli/` | The `dowse` subcommands: `args.rs` their options, `client.rs` reaching the running app (starting it in the background when need be), `output.rs` formatting its answers as text or JSON. |
+| `src/ipc/` | Keeping to one running app, and how the command line talks to it: later launches and subcommands send a JSON line over a local socket and read JSON lines back (`protocol.rs`). |
+| `src/diagnostics/` | The log (a ring buffer and a rotating file) and the metrics, with no UI dependency. |
+| `src/launch.rs` | Launching the desktop app from the command line. |
+| `src/bin/dowse-cli.rs` | The console program installed as `dowse.com` on Windows. |
+| `docs/agent-guide.md` | The guide `dowse guide` prints for coding agents. |
 | `src/shell.rs` | Explorer integration on Windows. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `src/fuzzy.rs` | Fuzzy matching for the command palette. |
