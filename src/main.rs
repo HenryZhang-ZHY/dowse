@@ -6,6 +6,8 @@ mod cli;
 mod editor;
 mod format;
 mod instance;
+#[cfg(windows)]
+mod shell;
 mod ui;
 
 use cli::Command;

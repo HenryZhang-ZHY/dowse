@@ -18,6 +18,11 @@ you develop in.
   you like; windows sharing a repository share its index and file watcher. The open
   windows, untitled workspaces included, come back on the next start. Closing a
   window with an unsaved workspace, while others stay open, asks whether to save it.
+- **Add from anywhere.** Drop folders on a window to add them, or a workspace file to
+  open it. From a terminal, `tgrep-gpui --add <folder>` adds to the running app's last
+  focused window, like `code --add`. On Windows, the repositories page can add "Add to
+  tgrep" to Explorer's folder menu, which does the same, and open workspace files with
+  a double click; this writes to the current user's registry only when you ask.
 - **Tags choose what to search.** Tag repositories freely: plain tags such as `mirror`
   or `dev`, or `key:value` tags such as `owner:alice` or `project:billing`. Every
   repository is also tagged `branch:<name>` with the branch it has checked out, which
@@ -93,6 +98,7 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's search state, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page. |
 | `src/cli.rs` | The command line. |
 | `src/instance.rs` | Keeping to one running app: later launches forward their command line over a local socket. |
+| `src/shell.rs` | Explorer integration on Windows. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 

@@ -84,9 +84,86 @@ impl SearchApp {
                             .text_xs()
                             .text_color(muted)
                             .child("Press Enter or leave the field to save tags. Removing a repository takes it out of this workspace only; its index, tags and files are kept."),
-                    ),
+                    )
+                    .children(self.render_explorer_integration(cx)),
             )
             .overflow_y_scrollbar()
+    }
+
+    /// Offer "Add to tgrep" in Explorer's folder menu, and opening workspace
+    /// files with a double click. Windows only.
+    fn render_explorer_integration(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        #[cfg(windows)]
+        {
+            use crate::shell::{self, State};
+            use gpui_kit::component::WindowExt as _;
+            use gpui_kit::component::notification::Notification;
+            let exe = std::env::current_exe().ok()?;
+            let state = shell::state(&exe);
+            let theme = cx.theme();
+            let (label, detail) = match state {
+                State::Missing => (
+                    "Add to Explorer",
+                    "Right-click a folder in Explorer and choose \"Add to tgrep\" to add it to the last focused window, as tgrep-gpui --add does. Workspace files open with a double click.",
+                ),
+                State::Installed => (
+                    "Remove from Explorer",
+                    "Explorer offers \"Add to tgrep\" on folders, and opens workspace files with a double click.",
+                ),
+                State::Elsewhere => (
+                    "Point Explorer here",
+                    "Explorer's \"Add to tgrep\" starts another copy of tgrep-gpui.",
+                ),
+            };
+            Some(
+                h_flex()
+                    .gap_4()
+                    .p_3()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(theme.radius_lg)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(div().text_sm().font_semibold().child("Explorer"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(detail),
+                            ),
+                    )
+                    .child(
+                        Button::new("explorer-integration")
+                            .outline()
+                            .small()
+                            .label(label)
+                            .on_click(cx.listener(move |_, _, window, cx| {
+                                let result = match state {
+                                    State::Installed => shell::uninstall(),
+                                    State::Missing | State::Elsewhere => shell::install(&exe),
+                                };
+                                if let Err(error) = result {
+                                    window.push_notification(
+                                        Notification::error(format!(
+                                            "Could not change Explorer's menu: {error}"
+                                        )),
+                                        cx,
+                                    );
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element(),
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = cx;
+            None
+        }
     }
 
     fn render_repository_row(&self, repo: &RepoView, cx: &Context<Self>) -> impl IntoElement {

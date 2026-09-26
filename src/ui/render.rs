@@ -70,6 +70,10 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_new_workspace))
             .on_action(cx.listener(Self::on_open_workspace))
             .on_action(cx.listener(Self::on_save_workspace_as))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.drop_paths(paths.paths(), window, cx)
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)

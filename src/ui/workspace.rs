@@ -119,6 +119,27 @@ impl SearchApp {
 
     // ----- commands ------------------------------------------------------------
 
+    /// Folders dropped on the window join its workspace; a dropped workspace
+    /// file opens.
+    pub(super) fn drop_paths(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (files, folders): (Vec<PathBuf>, Vec<PathBuf>) = paths
+            .iter()
+            .cloned()
+            .partition(|path| workspace::is_workspace_file(path));
+        let folders: Vec<PathBuf> = folders.into_iter().filter(|path| path.is_dir()).collect();
+        if !folders.is_empty() {
+            self.add_repositories(folders, window, cx);
+        }
+        if let Some(file) = files.into_iter().next() {
+            self.open_workspace_file(file, window, cx);
+        }
+    }
+
     pub(super) fn prompt_open_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
