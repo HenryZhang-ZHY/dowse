@@ -63,6 +63,16 @@ impl ChangeTracker {
         self.state.changed.lock().unwrap().keys().cloned().collect()
     }
 
+    /// Count these repository-relative paths as changed, as if the watcher
+    /// had seen them: files that changed while nothing watched.
+    pub fn note(&self, paths: Vec<String>) {
+        let epoch = self.state.epoch.load(Ordering::SeqCst);
+        let mut changed = self.state.changed.lock().unwrap();
+        for path in paths {
+            changed.insert(path, epoch);
+        }
+    }
+
     pub fn changed_count(&self) -> usize {
         self.state.changed.lock().unwrap().len()
     }
@@ -159,6 +169,18 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn noted_changes_count_until_the_next_build_covers_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let tracker = ChangeTracker::start(&root).unwrap();
+        tracker.note(vec!["src/a.rs".into(), "b.md".into()]);
+        assert_eq!(tracker.changed_paths(), ["b.md", "src/a.rs"]);
+        let mark = tracker.mark();
+        tracker.forget_before(mark);
+        assert_eq!(tracker.changed_count(), 0);
     }
 
     #[test]

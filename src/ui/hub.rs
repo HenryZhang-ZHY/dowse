@@ -24,6 +24,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Past this many changed files, reading them all on every search costs more
 /// than re-indexing, so the index is rebuilt in the background.
 const AUTO_REINDEX_CHANGES: usize = 2_000;
+/// Files modified this long before an index was finished may have changed
+/// after the build read them.
+const STALE_SLACK: Duration = Duration::from_secs(10);
 
 pub(super) struct RepoHub {
     library: Library,
@@ -325,7 +328,9 @@ impl RepoHub {
     }
 
     /// Load the repository's index (or walk it when there is none), then
-    /// queue a build if it has no usable index.
+    /// queue a build if it has no usable index. Files modified since the
+    /// index was built, while nothing watched them, count as changed, so
+    /// searches read them.
     fn load(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(state) = self.open.get_mut(id) else {
             return;
@@ -334,22 +339,34 @@ impl RepoHub {
             return;
         };
         state.activity = IndexActivity::Loading;
+        let tracker = state.tracker.clone();
         let id = id.to_string();
         state.load_task = Some(cx.spawn(async move |this, cx| {
-            let (status, corpus, elapsed) = cx
+            let (status, corpus, stale, elapsed) = cx
                 .background_spawn(async move {
                     let started = Instant::now();
-                    let loaded = (index.index_status(), index.load_corpus());
-                    (loaded.0, loaded.1, started.elapsed())
+                    let status = index.index_status();
+                    let corpus = index.load_corpus();
+                    let stale = match (&status, &tracker) {
+                        (IndexStatus::Ready { updated_at, .. }, Some(tracker))
+                            if corpus.is_indexed() =>
+                        {
+                            let stale = index.modified_since(*updated_at - STALE_SLACK);
+                            tracker.note(stale.clone());
+                            stale.len()
+                        }
+                        _ => 0,
+                    };
+                    (status, corpus, stale, started.elapsed())
                 })
                 .await;
             log::info!(
                 "loaded {id} in {elapsed:.0?}: {} files, {}",
                 corpus.file_count(),
                 if corpus.is_indexed() {
-                    "indexed"
+                    format!("indexed, {stale} modified since")
                 } else {
-                    "scanned, no usable index"
+                    "scanned, no usable index".into()
                 }
             );
             this.update(cx, |this, cx| {
@@ -357,6 +374,10 @@ impl RepoHub {
                     return;
                 };
                 state.corpus = Some(Arc::new(corpus));
+                state.changed_files = state
+                    .tracker
+                    .as_ref()
+                    .map_or(0, |tracker| tracker.changed_count());
                 let needs_index = !matches!(status, IndexStatus::Ready { .. });
                 state.activity = IndexActivity::Idle(status);
                 if needs_index {

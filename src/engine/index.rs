@@ -134,6 +134,20 @@ impl RepoIndex {
             .then_some((reader, visibility.paths))
     }
 
+    /// Files a search would read that were modified after `time`: those an
+    /// index built then may not have seen. Takes a walk of the folder, and
+    /// reads no file.
+    pub fn modified_since(&self, time: SystemTime) -> Vec<String> {
+        self.walk_files()
+            .into_iter()
+            .filter(|relative| {
+                std::fs::metadata(self.root.join(relative))
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| modified > time)
+            })
+            .collect()
+    }
+
     fn walk_files(&self) -> Vec<String> {
         let mut exclude_paths = Vec::new();
         if let Ok(index_dir) = std::fs::canonicalize(&self.index_dir) {
@@ -290,6 +304,24 @@ mod tests {
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn needle_here() {}\n").unwrap();
         std::fs::write(dir.path().join("README.md"), "no match in here\n").unwrap();
         dir
+    }
+
+    #[test]
+    fn finds_files_modified_after_a_point_in_time() {
+        let dir = tree();
+        let now = SystemTime::now();
+        let touch = |path: &str, time: SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(dir.path().join(path))
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        touch("README.md", now - Duration::from_secs(600));
+        touch("src/lib.rs", now + Duration::from_secs(60));
+        let index = RepoIndex::open(dir.path()).unwrap();
+        assert_eq!(index.modified_since(now), vec!["src/lib.rs".to_string()]);
     }
 
     #[test]
