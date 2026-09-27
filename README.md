@@ -23,14 +23,17 @@ still open, and each repository keeps its `.tgrep` index.
   windows, untitled workspaces included, come back on the next start. Closing a
   window with an unsaved workspace, while others stay open, asks whether to save it.
 - **The repositories page** (`Ctrl+,`) manages a workspace's repositories. Filter
-  them by name, path, branch or tag, select several and pull them, update or rebuild
+  them by name, path, branch or tag, select several (the box in the table's header
+  takes every one shown, and the header then holds what to do) and pull them, update or rebuild
   their indexes, add or remove tags (`-tag` removes one), set how often they are
   pulled, or take them out of the workspace. A row opens to its tags and pull
   settings, and shows its index and how its last pull went.
 - **Clone from GitHub, many at once.** The page's GitHub section lists an owner's
   repositories (your own unless you name a user or organization) through the
   [GitHub CLI](https://cli.github.com), so dowse never handles your sign-in: run
-  `gh auth login` once. Filter the list, show or hide forks and archived
+  `gh auth login` once. Pages of the list are fetched several at once and shown as
+  they arrive (an organization of 2,000 repositories takes seconds), and Stop keeps
+  what has arrived. Filter the list, show or hide forks and archived
   repositories, pick some (or all shown) and clone them into
   `<folder>/<owner>/<name>`, tagged `owner:<owner>`. Clones are blobless by default:
   every commit, but only the file contents checked out, the rest fetched when
