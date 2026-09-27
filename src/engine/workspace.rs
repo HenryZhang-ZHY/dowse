@@ -17,9 +17,6 @@ use super::{repo, store};
 
 /// The extension of saved workspace files.
 pub const EXTENSION: &str = "dowse-workspace";
-/// The extension used before the app was renamed from tgrep-gpui; such
-/// files still open.
-pub const LEGACY_EXTENSION: &str = "tgrep-workspace";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct WorkspaceFile {
@@ -79,7 +76,7 @@ pub fn name(file: &Path) -> String {
 /// Whether `path` names a workspace file rather than a folder.
 pub fn is_workspace_file(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|extension| extension == EXTENSION || extension == LEGACY_EXTENSION)
+        .is_some_and(|extension| extension == EXTENSION)
         && !path.is_dir()
 }
 
@@ -104,7 +101,6 @@ mod tests {
         assert_eq!(load(&file).unwrap(), vec![inside, outside]);
         assert_eq!(name(&file), "team");
         assert!(is_workspace_file(&file));
-        assert!(is_workspace_file(&root.join("old.tgrep-workspace")));
         assert!(!is_workspace_file(&root));
     }
 

@@ -12,7 +12,6 @@ pub mod library;
 pub mod preview;
 pub mod process;
 pub mod query;
-pub mod registry;
 pub mod repo;
 pub mod search;
 pub mod session;

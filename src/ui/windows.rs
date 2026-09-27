@@ -70,21 +70,10 @@ pub(super) struct Windows {
 impl Global for Windows {}
 
 impl Windows {
-    /// Read the settings (migrating an earlier version's) and create the
-    /// shared repository hub.
+    /// Read the settings and create the shared repository hub.
     pub(super) fn init(root: PathBuf, cx: &mut App) {
         let config = ConfigDir::new(root);
         let mut startup_errors = Vec::new();
-        if let Some(legacy) = dowse::engine::config::legacy_root()
-            && let Err(error) = config.adopt_legacy(&legacy)
-        {
-            startup_errors.push(format!(
-                "Could not carry over tgrep-gpui's settings: {error:#}"
-            ));
-        }
-        if let Err(error) = config.migrate() {
-            startup_errors.push(format!("Could not carry over your repositories: {error:#}"));
-        }
         let (session, session_locked) = match Session::load(&config.session_file()) {
             Ok(session) => (session, false),
             Err(error) => {

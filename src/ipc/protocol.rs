@@ -484,16 +484,16 @@ fn find_workspace(
     if workspace::is_workspace_file(&as_path) && as_path.is_file() {
         return Some(repo::identity(&as_path));
     }
-    [workspace::EXTENSION, workspace::LEGACY_EXTENSION]
-        .into_iter()
-        .map(|extension| config.workspaces_dir().join(format!("{name}.{extension}")))
-        .find(|file| file.is_file())
-        .or_else(|| {
-            recent
-                .iter()
-                .find(|file| workspace::name(file).eq_ignore_ascii_case(name))
-                .cloned()
-        })
+    let saved = config
+        .workspaces_dir()
+        .join(format!("{name}.{}", workspace::EXTENSION));
+    if saved.is_file() {
+        return Some(saved);
+    }
+    recent
+        .iter()
+        .find(|file| workspace::name(file).eq_ignore_ascii_case(name))
+        .cloned()
 }
 
 #[cfg(test)]

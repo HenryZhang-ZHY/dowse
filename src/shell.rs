@@ -1,8 +1,7 @@
 //! Explorer integration on Windows: "Add to dowse" on folders (`--add`, the
 //! GUI counterpart of `code --add`), and opening `.dowse-workspace` files
-//! (and `.tgrep-workspace` ones from before the rename) with a double click.
-//! Written to the current user's registry only when asked for, and removed
-//! the same way, along with what tgrep-gpui wrote.
+//! with a double click. Written to the current user's registry only when
+//! asked for, and removed the same way.
 
 use std::path::Path;
 
@@ -27,17 +26,8 @@ struct Key {
 const FOLDER_KEY: &str = r"Software\Classes\Directory\shell\dowse";
 const FOLDER_BACKGROUND_KEY: &str = r"Software\Classes\Directory\Background\shell\dowse";
 const EXTENSION_KEY: &str = r"Software\Classes\.dowse-workspace";
-const LEGACY_EXTENSION_KEY: &str = r"Software\Classes\.tgrep-workspace";
 const PROG_ID: &str = "dowse.workspace";
 const PROG_ID_KEY: &str = r"Software\Classes\dowse.workspace";
-
-/// What tgrep-gpui, as the app was called before, wrote.
-const LEGACY_KEYS: [&str; 3] = [
-    r"Software\Classes\Directory\shell\tgrep-gpui",
-    r"Software\Classes\Directory\Background\shell\tgrep-gpui",
-    r"Software\Classes\tgrep-gpui.workspace",
-];
-const LEGACY_PROG_ID: &str = "tgrep-gpui.workspace";
 
 /// The keys that make up the integration for the program at `exe`.
 fn keys(exe: &Path) -> Vec<Key> {
@@ -66,11 +56,6 @@ fn keys(exe: &Path) -> Vec<Key> {
         },
         Key {
             path: EXTENSION_KEY,
-            default: PROG_ID.into(),
-            values: vec![],
-        },
-        Key {
-            path: LEGACY_EXTENSION_KEY,
             default: PROG_ID.into(),
             values: vec![],
         },
@@ -117,7 +102,6 @@ mod registry {
 
     pub fn install(exe: &Path) -> io::Result<()> {
         let user = RegKey::predef(HKEY_CURRENT_USER);
-        remove_legacy(&user)?;
         for key in keys(exe) {
             let (created, _) = user.create_subkey(key.path)?;
             created.set_value("", &key.default)?;
@@ -134,24 +118,16 @@ mod registry {
         for path in [FOLDER_KEY, FOLDER_BACKGROUND_KEY, PROG_ID_KEY] {
             delete(&user, path)?;
         }
-        remove_legacy(&user)?;
-        // The extensions may since belong to another program; leave them then.
-        for extension in [EXTENSION_KEY, LEGACY_EXTENSION_KEY] {
-            let ours = user
-                .open_subkey(extension)
-                .and_then(|key| key.get_value::<String, _>(""))
-                .is_ok_and(|prog_id| prog_id == PROG_ID || prog_id == LEGACY_PROG_ID);
-            if ours {
-                user.delete_subkey_all(extension)?;
-            }
+        // The extension may since belong to another program; leave it then.
+        let ours = user
+            .open_subkey(EXTENSION_KEY)
+            .and_then(|key| key.get_value::<String, _>(""))
+            .is_ok_and(|prog_id| prog_id == PROG_ID);
+        if ours {
+            user.delete_subkey_all(EXTENSION_KEY)?;
         }
         associations_changed();
         Ok(())
-    }
-
-    /// Remove the menu entries and file type tgrep-gpui registered.
-    fn remove_legacy(user: &RegKey) -> io::Result<()> {
-        LEGACY_KEYS.iter().try_for_each(|path| delete(user, path))
     }
 
     fn delete(user: &RegKey, path: &str) -> io::Result<()> {
@@ -215,6 +191,5 @@ mod tests {
             r#""C:\Program Files\dowse\dowse.exe" "%1""#
         );
         assert_eq!(command(EXTENSION_KEY), PROG_ID);
-        assert_eq!(command(LEGACY_EXTENSION_KEY), PROG_ID);
     }
 }
