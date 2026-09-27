@@ -22,6 +22,35 @@ still open, and each repository keeps its `.tgrep` index.
   you like; windows sharing a repository share its index and file watcher. The open
   windows, untitled workspaces included, come back on the next start. Closing a
   window with an unsaved workspace, while others stay open, asks whether to save it.
+- **The repositories page** (`Ctrl+,`) manages a workspace's repositories. Filter
+  them by name, path, branch or tag, select several and pull them, update or rebuild
+  their indexes, add or remove tags (`-tag` removes one), set how often they are
+  pulled, or take them out of the workspace. A row opens to its tags and pull
+  settings, and shows its index and how its last pull went.
+- **Clone from GitHub, many at once.** The page's GitHub section lists an owner's
+  repositories (your own unless you name a user or organization) through the
+  [GitHub CLI](https://cli.github.com), so dowse never handles your sign-in: run
+  `gh auth login` once. Filter the list, show or hide forks and archived
+  repositories, pick some (or all shown) and clone them into
+  `<folder>/<owner>/<name>`, tagged `owner:<owner>`. Clones are blobless by default:
+  every commit, but only the file contents checked out, the rest fetched when
+  needed, which makes large repositories quick to clone while history still works.
+  Shallow (the latest commit only) and full clones are there too. Finished clones
+  join the workspace and get indexed. Repositories already cloned are marked, and
+  can be added with a click.
+- **Background tasks.** Clones and pulls run a few at a time (4 of each unless you
+  change it), each on a thread of its own, so the app stays usable while a large
+  repository clones. The page's Tasks section shows their progress and lets you
+  cancel, retry or clear them; the status bar shows what is running. Closing the
+  last window leaves the app running in the background until they finish.
+- **Pull on a schedule.** Give a repository a pull interval (`15m`, `1h`, `3d` and
+  so on) and dowse pulls it whenever the interval has passed while it runs,
+  including right after starting when it is overdue. A pull fetches `origin`, then
+  fast-forwards only when origin's default branch is checked out, tracked files are
+  unchanged and there are no local commits; otherwise it only fetches, and says why
+  (`on feature/x, not main`, `uncommitted changes`). It never merges, rebases or
+  stashes. A pull that brings commits brings the index up to date. The interval shows
+  as the tag `sync:<interval>`, so the scope bar can pick the synced repositories.
 - **Add from anywhere.** Drop folders on a window to add them, or a workspace file to
   open it. From a terminal, `dowse --add <folder>` adds to the running app's last
   focused window, like `code --add`. On Windows, the repositories page can add "Add to
@@ -126,7 +155,8 @@ still open, and each repository keeps its `.tgrep` index.
   of the name in order, `nt` for New Tab, and press `Enter`; `Esc` clears the
   filter, then closes.
 - Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
-  page, `Ctrl+F` focuses the search box, `Ctrl+P` the path filter, and
+  page (the palette also has Clone from GitHub, Pull Repositories in Scope and Show
+  Background Tasks), `Ctrl+F` focuses the search box, `Ctrl+P` the path filter, and
   `Ctrl+Shift+R` updates the indexes in scope (the palette also rebuilds them from
   scratch). `Ctrl+Shift+N` opens a new window,
   `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one. `Ctrl+Shift+I` or
@@ -184,6 +214,11 @@ list (`repos.json`) turns that list into a saved "Default" workspace. Set
 | `dowse repos` | Lists the repositories with branch, index state, file count, when they were indexed and tags. |
 | `dowse repos add <folder>... [-t <tag>]` | Adds repositories, or every repository in a folder, to the library. |
 | `dowse repos tag <repo> <tag>... [-r <tag>]` | Adds tags to a repository, or removes them. |
+| `dowse repos github [<owner>]` | Lists an owner's GitHub repositories (yours by default) through `gh`; `-q` prints `owner/name` only. |
+| `dowse repos clone <owner/name>... [--into <folder>]` | Clones in the app's background into `<folder>/<owner>/<name>` (the last folder used when not given). `--from <owner>` clones an owner's repositories, `--mode shallow\|full` fetches less or more, `-t` tags, `--pull-every 1h` schedules pulls and `--wait` waits. |
+| `dowse repos pull [<repo>...] [--wait]` | Pulls repositories, or those in scope (`--here`, `-t`, `-W`). |
+| `dowse repos sync <repo>... --every <interval>` | Pulls them every `15m`, `1h`, `3d`...; `--off` stops. |
+| `dowse tasks [--wait]` | Lists the background clones and pulls; `dowse tasks cancel <id>...` or `--all` cancels them. |
 | `dowse index [--wait] [--full]` | Brings the indexes in scope up to date, reading only the files that changed; `--full` builds them again from every file. |
 | `dowse status` | Shows the running app: windows, repositories, indexing, where its settings and log are. |
 | `dowse dev logs [-f] [--level debug]` | Prints the app's latest log records, or follows them. |
@@ -223,8 +258,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `index.rs` opens, builds, updates and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`) and tgrep-gpui's settings. |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page and `repos_page.rs` the repositories page; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `github.rs` lists and clones GitHub repositories through `gh`; `sync.rs` pulls a repository when it is safe to and parses pull intervals; `tasks.rs` queues background tasks; `process.rs` runs git and gh. `index.rs` opens, builds, updates and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings and migrates `repos.json` (read by `registry.rs`) and tgrep-gpui's settings. |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page, `repos_page.rs` the repositories page and `manager.rs` its state; `tasks.rs` runs clones and pulls and pulls on schedule; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
 | `src/cli/` | The `dowse` subcommands: `args.rs` their options, `client.rs` reaching the running app (starting it in the background when need be), `output.rs` formatting its answers as text or JSON. |
 | `src/ipc/` | Keeping to one running app, and how the command line talks to it: later launches and subcommands send a JSON line over a local socket and read JSON lines back (`protocol.rs`). |
 | `src/diagnostics/` | The log (a ring buffer and a rotating file) and the metrics, with no UI dependency. |

@@ -96,6 +96,21 @@ dowse index --here --full                    # rebuild it from every file
 dowse status                                 # the app, its windows and indexing
 ```
 
+Getting code from GitHub (through `gh`, which holds the user's sign-in):
+
+```
+dowse repos github my-org -q                 # the org's repositories, names only
+dowse repos clone my-org/api --into ~/mirrors --wait   # clone, add, wait
+dowse repos clone --from my-org --pull-every 1h        # all of them, kept current
+dowse repos pull api --wait                  # fetch; fast-forward when safe
+dowse tasks                                  # clones and pulls in the background
+```
+
+Clones land in `<folder>/<owner>/<name>`, tagged `owner:<owner>`, blobless
+by default (full history, file contents fetched on demand). A pull never
+merges or touches local changes: on another branch, with uncommitted changes
+or local commits it only fetches, and says why.
+
 A repository without an index is scanned until its index is built in the
 background; the footer notes it.
 
