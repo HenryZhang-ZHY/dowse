@@ -20,5 +20,6 @@ mod store;
 pub mod sync;
 pub mod syntax;
 pub mod table;
+pub mod tasks;
 pub mod watch;
 pub mod workspace;
