@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -16,7 +18,7 @@ use super::hub::{IndexJob, RepoView};
 use super::tasks::{CloneJob, TaskHub};
 use super::windows::Windows;
 use crate::format;
-use dowse::engine::github::{self, CloneMode, RemoteFilter, RemoteRepo};
+use dowse::engine::github::{self, CloneMode, ListProgress, RemoteFilter, RemoteRepo};
 use dowse::engine::repo;
 use dowse::engine::session::CloneDefaults;
 use dowse::engine::sync::Interval;
@@ -67,24 +69,63 @@ pub(super) struct GithubPanel {
     /// The signed-in user, once known.
     pub(super) me: Option<String>,
     load_task: Option<Task<()>>,
+    /// Stops the listing running.
+    cancel: Option<Arc<AtomicBool>>,
 }
 
-pub(super) enum Listing {
+/// An owner's repositories on GitHub, as far as they are listed.
+#[derive(Default)]
+pub(super) struct Listing {
+    pub(super) state: ListingState,
+    /// Whose they are: as typed until GitHub says.
+    pub(super) owner: String,
+    /// Most recently pushed first.
+    pub(super) repos: Vec<RemoteRepo>,
+    pub(super) progress: ListProgress,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum ListingState {
+    #[default]
     NotLoaded,
-    Loading(String),
-    Loaded {
-        owner: String,
-        repos: Vec<RemoteRepo>,
-    },
+    Loading,
+    Loaded,
+    /// Stopped before the end; `repos` holds what came before.
+    Stopped,
     Failed(String),
 }
 
 impl Listing {
     pub(super) fn repos(&self) -> &[RemoteRepo] {
-        match self {
-            Listing::Loaded { repos, .. } => repos,
-            _ => &[],
+        &self.repos
+    }
+
+    pub(super) fn is_loading(&self) -> bool {
+        self.state == ListingState::Loading
+    }
+}
+
+/// What a listing running in the background says.
+enum ListingEvent {
+    Me(String),
+    Page(Vec<RemoteRepo>, ListProgress),
+    /// The error, when it failed.
+    Done(Option<String>),
+}
+
+impl GithubPanel {
+    /// Stop the listing running, if one is.
+    fn stop_listing(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
         }
+        self.load_task = None;
+    }
+}
+
+impl Drop for GithubPanel {
+    fn drop(&mut self) {
+        self.stop_listing();
     }
 }
 
@@ -185,12 +226,13 @@ impl Manager {
                 pull_every: None,
                 forks: false,
                 archived: false,
-                listing: Listing::NotLoaded,
+                listing: Listing::default(),
                 selected: BTreeSet::new(),
                 visible: Vec::new(),
                 scroll: UniformListScrollHandle::new(),
                 me: None,
                 load_task: None,
+                cancel: None,
             },
             _subscriptions: subscriptions,
         }
@@ -200,7 +242,7 @@ impl Manager {
 impl SearchApp {
     pub(super) fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.manager.section = section;
-        if section == Section::GitHub && matches!(self.manager.github.listing, Listing::NotLoaded) {
+        if section == Section::GitHub && self.manager.github.listing.state == ListingState::NotLoaded {
             self.start_loading_github(cx);
         }
         cx.notify();
@@ -428,46 +470,109 @@ impl SearchApp {
             .trim()
             .to_string();
         let owner = (!owner.is_empty()).then_some(owner);
-        let need_me = self.manager.github.me.is_none();
-        self.manager.github.listing =
-            Listing::Loading(owner.clone().unwrap_or_else(|| "your account".into()));
-        self.manager.github.selected.clear();
-        self.manager.github.visible.clear();
+        let github = &mut self.manager.github;
+        github.stop_listing();
+        let cancel = Arc::new(AtomicBool::new(false));
+        github.cancel = Some(cancel.clone());
+        github.listing = Listing {
+            state: ListingState::Loading,
+            owner: owner.clone().unwrap_or_else(|| "your account".into()),
+            ..Listing::default()
+        };
+        github.selected.clear();
+        github.visible.clear();
+        let need_me = github.me.is_none();
         let mut defaults = Windows::clone_defaults(cx);
         defaults.owner = owner.clone();
         Windows::set_clone_defaults(defaults, cx);
-        self.manager.github.load_task = Some(cx.spawn(async move |this, cx| {
-            let (listed, me) = cx
-                .background_spawn(async move {
-                    let me = if need_me {
-                        github::current_user().ok()
-                    } else {
-                        None
-                    };
-                    (github::list(owner.as_deref(), None), me)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                let github = &mut this.manager.github;
-                if me.is_some() {
-                    github.me = me;
+
+        let (sender, received) = async_channel::unbounded();
+        if need_me {
+            let sender = sender.clone();
+            cx.background_spawn(async move {
+                if let Ok(me) = github::current_user() {
+                    sender.send_blocking(ListingEvent::Me(me)).ok();
                 }
-                github.listing = match listed {
-                    Ok(repos) => {
-                        let owner = repos
-                            .first()
-                            .map(|repo| repo.owner.clone())
-                            .or_else(|| github.me.clone())
-                            .unwrap_or_default();
-                        Listing::Loaded { owner, repos }
-                    }
-                    Err(error) => Listing::Failed(format!("{error:#}")),
-                };
-                this.refilter_github(cx);
             })
-            .ok();
+            .detach();
+        }
+        cx.background_spawn(async move {
+            let listed = github::list_each(owner.as_deref(), None, &cancel, |repos, progress| {
+                sender
+                    .send_blocking(ListingEvent::Page(repos, progress))
+                    .ok();
+            });
+            sender
+                .send_blocking(ListingEvent::Done(listed.err().map(|error| format!("{error:#}"))))
+                .ok();
+        })
+        .detach();
+        // Dropping this (for another listing, or the window) stops listening;
+        // `cancel` stops the listing itself.
+        self.manager.github.load_task = Some(cx.spawn(async move |this, cx| {
+            while let Ok(event) = received.recv().await {
+                // Take whatever else has arrived too, and show it at once.
+                let mut events = vec![event];
+                while let Ok(event) = received.try_recv() {
+                    events.push(event);
+                }
+                let shown = this.update(cx, |this, cx| {
+                    for event in events {
+                        this.on_listing_event(event);
+                    }
+                    this.refilter_github(cx);
+                });
+                if shown.is_err() {
+                    break;
+                }
+            }
         }));
         cx.notify();
+    }
+
+    fn on_listing_event(&mut self, event: ListingEvent) {
+        let github = &mut self.manager.github;
+        let listing = &mut github.listing;
+        match event {
+            ListingEvent::Me(me) => github.me = Some(me),
+            ListingEvent::Page(repos, progress) => {
+                if listing.state != ListingState::Loading {
+                    return;
+                }
+                if let Some(first) = repos.first().filter(|_| listing.repos.is_empty()) {
+                    listing.owner = first.owner.clone();
+                }
+                listing.repos.extend(repos);
+                github::sort_by_pushed(&mut listing.repos);
+                listing.progress = progress;
+            }
+            ListingEvent::Done(error) => {
+                if listing.state != ListingState::Loading {
+                    return;
+                }
+                if listing.repos.is_empty()
+                    && let Some(me) = &github.me
+                    && listing.owner == "your account"
+                {
+                    listing.owner = me.clone();
+                }
+                listing.state = match error {
+                    None => ListingState::Loaded,
+                    Some(error) => ListingState::Failed(error),
+                };
+                github.cancel = None;
+            }
+        }
+    }
+
+    /// Stop listing, keeping the repositories listed so far.
+    pub(super) fn stop_github(&mut self, cx: &mut Context<Self>) {
+        let github = &mut self.manager.github;
+        if github.listing.state == ListingState::Loading {
+            github.stop_listing();
+            github.listing.state = ListingState::Stopped;
+            cx.notify();
+        }
     }
 
     pub(super) fn remote_filter(&self, cx: &App) -> RemoteFilter {

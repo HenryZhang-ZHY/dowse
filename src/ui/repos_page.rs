@@ -23,7 +23,7 @@ use gpui_kit::*;
 
 use super::app::SearchApp;
 use super::hub::{IndexActivity, IndexJob, RepoView};
-use super::manager::{Listing, RemoteStatus, Section};
+use super::manager::{ListingState, RemoteStatus, Section};
 use super::render::tag_label;
 use super::tasks::TaskHub;
 use crate::format;
@@ -800,29 +800,49 @@ impl SearchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let github = &self.manager.github;
-        let loading = matches!(github.listing, Listing::Loading(_));
-        let listed = github.listing.repos().len();
+        let listing = &github.listing;
+        let loading = listing.is_loading();
+        let listed = listing.repos().len();
         let shown = github.visible.len();
         let chosen = github.selected.len();
+        let owner = listing.owner.clone();
+        let repositories = format::plural(listed, "repository", "repositories");
 
-        let status: AnyElement = match &github.listing {
-            Listing::NotLoaded => div().child("").into_any_element(),
-            Listing::Loading(owner) => h_flex()
+        let status: AnyElement = match &listing.state {
+            ListingState::NotLoaded => div().into_any_element(),
+            ListingState::Loading => h_flex()
                 .gap_1p5()
                 .child(Spinner::new().xsmall())
-                .child(format!("Listing the repositories of {owner}…"))
+                .child(match listing.progress.pages {
+                    0 => format!("Listing the repositories of {owner}…"),
+                    pages => format!(
+                        "Listing {owner}… {repositories}, {} of {pages} pages",
+                        listing.progress.pages_done
+                    ),
+                })
                 .into_any_element(),
-            Listing::Loaded { owner, .. } => div()
-                .child(format!(
-                    "{} of {owner}",
-                    format::plural(listed, "repository", "repositories")
-                ))
+            ListingState::Loaded => div()
+                .child(format!("{repositories} of {owner}"))
                 .into_any_element(),
-            Listing::Failed(error) => div()
+            ListingState::Stopped => div()
+                .child(format!("Stopped after {repositories} of {owner}"))
+                .into_any_element(),
+            ListingState::Failed(error) => div()
+                .id("listing-error")
                 .text_color(theme.danger)
                 .max_w(px(560.))
                 .truncate()
-                .child(error.clone())
+                .child(if listed > 0 {
+                    format!("{repositories} listed, then: {error}")
+                } else {
+                    error.clone()
+                })
+                .tooltip({
+                    let error = error.clone();
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(error.clone()).build(window, cx)
+                    }
+                })
                 .into_any_element(),
         };
 
@@ -838,18 +858,23 @@ impl SearchApp {
                         .prefix(Icon::new(Lucide::Users).small().text_color(muted)),
                 ),
             )
-            .child(
+            .child(if loading {
+                Button::new("stop-github")
+                    .outline()
+                    .small()
+                    .icon(Lucide::CircleStop)
+                    .label("Stop")
+                    .tooltip("Stop listing, keeping the repositories listed so far")
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_github(cx)))
+            } else {
                 Button::new("load-github")
                     .outline()
                     .small()
                     .icon(Lucide::RefreshCw)
                     .label(if listed > 0 { "Refresh" } else { "List" })
-                    .loading(loading)
-                    .tooltip(
-                        "List the owner's repositories with the GitHub CLI (gh), 100 at a time",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| this.load_github(window, cx))),
-            )
+                    .tooltip("List the owner's repositories with the GitHub CLI (gh)")
+                    .on_click(cx.listener(|this, _, window, cx| this.load_github(window, cx)))
+            })
             .child(div().text_xs().text_color(muted).child(status))
             .child(div().flex_1())
             .when_some(github.me.clone(), |row, me| {
@@ -913,13 +938,15 @@ impl SearchApp {
             }));
 
         let list = if shown == 0 {
-            match &github.listing {
-                Listing::NotLoaded | Listing::Loading(_) => div().flex_1().into_any_element(),
-                Listing::Failed(error) => {
+            match &github.listing.state {
+                ListingState::NotLoaded | ListingState::Loading => {
+                    div().flex_1().into_any_element()
+                }
+                ListingState::Failed(error) if listed == 0 => {
                     empty_state(Lucide::Github, "Could not list the repositories", error, cx)
                         .into_any_element()
                 }
-                Listing::Loaded { .. } => empty_state(
+                _ => empty_state(
                     IconName::Search,
                     if listed == 0 {
                         "The owner has no repositories you can see"
