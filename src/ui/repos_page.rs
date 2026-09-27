@@ -33,6 +33,9 @@ use dowse::engine::tasks::{TaskInfo, TaskKind, TaskState};
 
 /// Height of a row in the GitHub list, which is virtualized.
 const REMOTE_ROW_HEIGHT: f32 = 56.;
+/// Height of a table's header, which holds the bulk actions when rows are
+/// selected, so choosing one moves nothing.
+const HEADER_HEIGHT: f32 = 40.;
 const PAGE_WIDTH: f32 = 1180.;
 
 impl SearchApp {
@@ -160,39 +163,36 @@ impl SearchApp {
         let muted = theme.muted_foreground;
         let repos = self.managed_repos(cx);
         let total = self.members.len();
-        let selected = self.selected_ids();
-        let all_shown_selected = !repos.is_empty()
-            && repos
-                .iter()
-                .all(|repo| self.manager.selected.contains(&repo.info.id));
+
+        // Only the rows on screen are rendered; the list is told when the
+        // rows shown change.
+        let ids: Vec<String> = repos.iter().map(|repo| repo.info.id.clone()).collect();
+        if ids != self.manager.shown_ids {
+            // The rows, then the notes below them.
+            self.manager.list.reset(ids.len() + 1);
+            self.manager.shown_ids = ids;
+        }
+        let shown = repos.len();
+        self.manager.shown = repos;
 
         let toolbar = h_flex()
             .flex_none()
             .px_6()
             .pt_4()
-            .pb_2()
+            .pb_3()
             .gap_3()
             .child(
-                Checkbox::new("select-all-repos")
-                    .checked(all_shown_selected)
-                    .tooltip("Select every repository shown")
-                    .disabled(repos.is_empty())
-                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                        this.select_all_shown(*checked, cx)
-                    })),
-            )
-            .child(
-                div().w(px(380.)).child(
+                div().w(px(420.)).child(
                     Input::new(&self.manager.filter)
                         .small()
                         .cleanable(true)
                         .prefix(Icon::new(IconName::Search).small().text_color(muted)),
                 ),
             )
-            .child(div().text_xs().text_color(muted).child(if repos.len() == total {
+            .child(div().text_xs().text_color(muted).child(if shown == total {
                 format::plural(total, "repository", "repositories")
             } else {
-                format!("{} of {total} shown", repos.len())
+                format!("{shown} of {total} shown")
             }))
             .child(div().flex_1())
             .child(
@@ -202,9 +202,9 @@ impl SearchApp {
                     .icon(Lucide::CloudDownload)
                     .label("Pull all")
                     .tooltip("Pull every repository shown: fetch, and fast-forward when that is safe")
-                    .disabled(repos.is_empty())
+                    .disabled(shown == 0)
                     .on_click(cx.listener(|this, _, window, cx| {
-                        let ids = this.managed_repos(cx).into_iter().map(|r| r.info.id.clone()).collect();
+                        let ids = this.manager.shown_ids.clone();
                         this.pull_repos(ids, window, cx)
                     })),
             )
@@ -215,15 +215,14 @@ impl SearchApp {
                     .icon(Lucide::RefreshCw)
                     .label("Update indexes")
                     .tooltip("Update the index of every repository shown, reading only the files that changed")
-                    .disabled(repos.is_empty())
+                    .disabled(shown == 0)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let ids: Vec<String> =
-                            this.managed_repos(cx).into_iter().map(|r| r.info.id.clone()).collect();
+                        let ids = this.manager.shown_ids.clone();
                         this.index_repos(&ids, IndexJob::Update, cx)
                     })),
             );
 
-        let list =
+        let body =
             if total == 0 {
                 empty_state(
                     Lucide::FolderGit2,
@@ -254,166 +253,230 @@ impl SearchApp {
                         ),
                 )
                 .into_any_element()
-            } else if repos.is_empty() {
-                empty_state(IconName::Search, "No repositories match the filter", "", cx)
-                    .into_any_element()
             } else {
-                let rows: Vec<AnyElement> = repos
-                    .iter()
-                    .map(|repo| self.render_repository_row(repo, cx).into_any_element())
-                    .collect();
                 v_flex()
-                    .mx_6()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(theme.radius_lg)
-                    .overflow_hidden()
-                    .children(rows)
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_workspace_header(cx))
+                    .child(if shown == 0 {
+                        div()
+                            .mx_6()
+                            .border_x_1()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .rounded_b(theme.radius_lg)
+                            .child(empty_state(
+                                IconName::Search,
+                                "No repositories match the filter",
+                                "",
+                                cx,
+                            ))
+                            .into_any_element()
+                    } else {
+                        list(
+                            self.manager.list.clone(),
+                            cx.processor(|this, row: usize, _, cx| {
+                                match this.manager.shown.get(row).cloned() {
+                                    Some(repo) => {
+                                        let last = row + 1 == this.manager.shown.len();
+                                        this.render_repository_row(&repo, last, cx)
+                                            .into_any_element()
+                                    }
+                                    None => this.render_workspace_notes(cx).into_any_element(),
+                                }
+                            }),
+                        )
+                        .flex_1()
+                        .min_h_0()
+                        .into_any_element()
+                    })
                     .into_any_element()
             };
 
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .child(toolbar)
-            .when(!selected.is_empty(), |page| {
-                page.child(self.render_selection_bar(selected.len(), cx))
-            })
-            .child(
-                div()
-                    .id("repository-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .child(
-                        v_flex()
-                            .pb_6()
-                            .gap_4()
-                            .child(list)
-                            .child(
-                                div()
-                                    .px_6()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child("Click a repository for its tags and pull settings. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept."),
-                            )
-                            .children(self.render_explorer_integration(cx)),
-                    ),
-            )
+        v_flex().flex_1().min_h_0().child(toolbar).child(body)
     }
 
-    /// Actions on the selected repositories.
-    fn render_selection_bar(&self, count: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The top of the table: a box that selects every repository shown, and
+    /// the column names, or with some selected, what can be done to them.
+    fn render_workspace_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let app = cx.entity().downgrade();
-        h_flex()
+        let muted = theme.muted_foreground;
+        let selected = self.selected_ids().len();
+        let shown_selected = self
+            .manager
+            .shown_ids
+            .iter()
+            .filter(|id| self.manager.selected.contains(*id))
+            .count();
+        let chosen = Chosen::of(shown_selected, self.manager.shown_ids.len());
+        let select_all = select_all_box(
+            "select-all-repos",
+            chosen,
+            self.manager.shown_ids.is_empty(),
+            if chosen == Chosen::All {
+                "Clear the selection"
+            } else {
+                "Select every repository shown"
+            },
+            cx.listener(move |this, _, _, cx| this.select_all_shown(chosen != Chosen::All, cx)),
+            cx,
+        );
+        let row = h_flex()
+            .h(px(HEADER_HEIGHT))
+            .px_3()
+            .gap_3()
+            .child(select_all);
+        let row = if selected == 0 {
+            row.text_xs()
+                .text_color(muted)
+                .child(div().flex_1().pl(px(28.)).child("Repository"))
+                .child(div().w(px(320.)).text_right().child("Index"))
+                // Over the row's buttons.
+                .child(div().w(px(102.)))
+        } else {
+            let app = cx.entity().downgrade();
+            row.gap_1()
+                .child(
+                    div()
+                        .pl_2()
+                        .pr_2()
+                        .text_sm()
+                        .font_semibold()
+                        .child(format!("{selected} selected")),
+                )
+                .child(div().w(px(1.)).h(px(18.)).bg(theme.border))
+                .child(
+                    Button::new("bulk-pull")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::CloudDownload)
+                        .label("Pull")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let ids = this.selected_ids();
+                            this.pull_repos(ids, window, cx)
+                        })),
+                )
+                .child(
+                    Button::new("bulk-index")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::RefreshCw)
+                        .label("Update Index")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let ids = this.selected_ids();
+                            this.index_repos(&ids, IndexJob::Update, cx)
+                        })),
+                )
+                .child(
+                    Button::new("bulk-rebuild")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::Hammer)
+                        .label("Rebuild")
+                        .tooltip("Build the indexes again from every file")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let ids = this.selected_ids();
+                            this.index_repos(&ids, IndexJob::Rebuild, cx)
+                        })),
+                )
+                .child(
+                    Button::new("bulk-sync")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::Timer)
+                        .label("Auto Pull")
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |menu, _, _| {
+                            interval_menu(menu, None, {
+                                let app = app.clone();
+                                move |every, window, cx| {
+                                    app.update(cx, |this, cx| {
+                                        let ids = this.selected_ids();
+                                        this.set_pull_every(&ids, every, window, cx)
+                                    })
+                                    .ok();
+                                }
+                            })
+                        }),
+                )
+                .child(
+                    div().ml_2().w(px(260.)).child(
+                        Input::new(&self.manager.bulk_tags)
+                            .xsmall()
+                            .prefix(Icon::new(Lucide::Tag).xsmall()),
+                    ),
+                )
+                .child(
+                    Button::new("bulk-tag")
+                        .ghost()
+                        .xsmall()
+                        .label("Apply Tags")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.apply_bulk_tags(window, cx)),
+                        ),
+                )
+                .child(div().flex_1())
+                .child(
+                    Button::new("bulk-remove")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::Trash)
+                        .label("Remove")
+                        .tooltip(
+                            "Take them out of this workspace. Their files, indexes and tags are kept.",
+                        )
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.remove_selected(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new("bulk-clear")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Close)
+                        .tooltip("Clear the selection")
+                        .on_click(cx.listener(|this, _, _, cx| this.select_all_shown(false, cx))),
+                )
+        };
+        div()
             .flex_none()
             .mx_6()
-            .mb_2()
-            .px_3()
-            .py_1p5()
-            .gap_2()
-            .rounded(theme.radius_lg)
-            .bg(theme.accent)
-            .text_color(theme.accent_foreground)
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .child(format!("{count} selected")),
-            )
-            .child(div().w(px(1.)).h(px(18.)).bg(theme.border))
-            .child(
-                Button::new("bulk-pull")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::CloudDownload)
-                    .label("Pull")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let ids = this.selected_ids();
-                        this.pull_repos(ids, window, cx)
-                    })),
-            )
-            .child(
-                Button::new("bulk-index")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::RefreshCw)
-                    .label("Update Index")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let ids = this.selected_ids();
-                        this.index_repos(&ids, IndexJob::Update, cx)
-                    })),
-            )
-            .child(
-                Button::new("bulk-rebuild")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Hammer)
-                    .label("Rebuild")
-                    .tooltip("Build the indexes again from every file")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let ids = this.selected_ids();
-                        this.index_repos(&ids, IndexJob::Rebuild, cx)
-                    })),
-            )
-            .child(
-                Button::new("bulk-sync")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Timer)
-                    .label("Auto Pull")
-                    .dropdown_caret(true)
-                    .dropdown_menu(move |menu, _, _| {
-                        interval_menu(menu, None, {
-                            let app = app.clone();
-                            move |every, window, cx| {
-                                app.update(cx, |this, cx| {
-                                    let ids = this.selected_ids();
-                                    this.set_pull_every(&ids, every, window, cx)
-                                })
-                                .ok();
-                            }
-                        })
-                    }),
-            )
-            .child(
-                div().w(px(300.)).child(
-                    Input::new(&self.manager.bulk_tags)
-                        .xsmall()
-                        .prefix(Icon::new(Lucide::Tag).xsmall()),
-                ),
-            )
-            .child(
-                Button::new("bulk-tag")
-                    .ghost()
-                    .xsmall()
-                    .label("Apply Tags")
-                    .on_click(cx.listener(|this, _, window, cx| this.apply_bulk_tags(window, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("bulk-remove")
-                    .ghost()
-                    .xsmall()
-                    .icon(Lucide::Trash)
-                    .label("Remove")
-                    .tooltip(
-                        "Take them out of this workspace. Their files, indexes and tags are kept.",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| this.remove_selected(window, cx))),
-            )
-            .child(
-                Button::new("bulk-clear")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Close)
-                    .tooltip("Clear the selection")
-                    .on_click(cx.listener(|this, _, _, cx| this.select_all_shown(false, cx))),
-            )
+            .border_1()
+            .border_color(theme.border)
+            .rounded_t(theme.radius_lg)
+            .bg(if selected == 0 {
+                theme.table_head
+            } else {
+                theme.accent
+            })
+            .when(selected > 0, |header| {
+                header.text_color(theme.accent_foreground)
+            })
+            .child(row)
     }
 
-    fn render_repository_row(&self, repo: &RepoView, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Below the rows: what the page does, and Explorer's menu.
+    fn render_workspace_notes(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .pt_4()
+            .pb_6()
+            .gap_4()
+            .child(
+                div()
+                    .px_6()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Click a repository for its tags and pull settings. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept."),
+            )
+            .children(self.render_explorer_integration(cx))
+    }
+
+    fn render_repository_row(
+        &self,
+        repo: &RepoView,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let tasks = TaskHub::global(cx);
         let tasks = tasks.read(cx);
         let theme = cx.theme();
@@ -421,7 +484,7 @@ impl SearchApp {
         let id = repo.info.id.clone();
         let selected = self.manager.selected.contains(&id);
         let expanded = self.manager.expanded.as_deref() == Some(id.as_str());
-        let is_git = Path::new(&id).join(".git").exists();
+        let is_git = self.manager.is_git(&id);
         let pulling = tasks.is_pulling(&id);
         let last_pull = tasks.last_pull(&id).cloned();
         let problem = matches!(
@@ -635,13 +698,23 @@ impl SearchApp {
             .child(status)
             .child(actions);
 
-        v_flex()
-            .border_b_1()
-            .border_color(theme.table_row_border)
+        let (row_border, border, radius) = (theme.table_row_border, theme.border, theme.radius_lg);
+        let item = v_flex()
+            .when(!last, |item| item.border_b_1().border_color(row_border))
             .child(row)
             .when(expanded, |column| {
                 column.child(self.render_repository_details(repo, cx))
-            })
+            });
+        // The table's sides, and its bottom under the last row. A list
+        // places its items without their margins, so the gutter is padding.
+        div().px_6().child(
+            div()
+                .border_x_1()
+                .border_color(border)
+                .when(last, |side| side.border_b_1().rounded_b(radius))
+                .overflow_hidden()
+                .child(item),
+        )
     }
 
     /// A repository's tags and pull settings, below its row.
@@ -653,7 +726,7 @@ impl SearchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let id = repo.info.id.clone();
-        let is_git = Path::new(&id).join(".git").exists();
+        let is_git = self.manager.is_git(&id);
         let current = repo.info.pull_every;
         let app = cx.entity().downgrade();
         let label = |text: &str| {
@@ -724,8 +797,7 @@ impl SearchApp {
             use crate::shell::{self, State};
             use gpui_kit::component::WindowExt as _;
             use gpui_kit::component::notification::Notification;
-            let exe = std::env::current_exe().ok()?;
-            let state = shell::state(&exe);
+            let (exe, state) = self.manager.explorer_state()?;
             let theme = cx.theme();
             let (label, detail) = match state {
                 State::Missing => (
@@ -768,11 +840,12 @@ impl SearchApp {
                             .outline()
                             .small()
                             .label(label)
-                            .on_click(cx.listener(move |_, _, window, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 let result = match state {
                                     State::Installed => shell::uninstall(),
                                     State::Missing | State::Elsewhere => shell::install(&exe),
                                 };
+                                this.manager.forget_explorer_state();
                                 if let Err(error) = result {
                                     window.push_notification(
                                         Notification::error(format!(
@@ -1606,6 +1679,76 @@ fn render_remote_row(
                 .child(status_element),
         )
         .into_any_element()
+}
+
+/// How many of the rows shown are selected, as a header's box shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Chosen {
+    None,
+    Some,
+    All,
+}
+
+impl Chosen {
+    fn of(selected: usize, shown: usize) -> Self {
+        match selected {
+            0 => Chosen::None,
+            n if n >= shown => Chosen::All,
+            _ => Chosen::Some,
+        }
+    }
+}
+
+/// A table header's checkbox, which selects every row shown: ticked when
+/// they all are, a dash when some are. It looks like the rows' checkboxes
+/// and sits in their column.
+fn select_all_box(
+    id: &'static str,
+    chosen: Chosen,
+    disabled: bool,
+    tooltip: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let marked = chosen != Chosen::None;
+    let color = if marked { theme.primary } else { theme.input };
+    div()
+        .id(id)
+        .flex_none()
+        .relative()
+        .size(rems(1.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .rounded(theme.radius.min(px(4.)))
+        .border_color(if disabled { color.opacity(0.5) } else { color })
+        .map(|this| {
+            if marked {
+                this.bg(if disabled { color.opacity(0.5) } else { color })
+            } else {
+                this.bg(theme.background)
+            }
+        })
+        .when(marked, |this| {
+            this.child(
+                Icon::new(if chosen == Chosen::All {
+                    IconName::Check
+                } else {
+                    IconName::Minus
+                })
+                .size(px(12.))
+                .text_color(theme.primary_foreground),
+            )
+        })
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+                })
+                .on_click(on_click)
+        })
 }
 
 /// Fill `menu` with the pull intervals, calling `choose` with the one picked.

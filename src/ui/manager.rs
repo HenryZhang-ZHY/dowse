@@ -3,6 +3,7 @@
 //! listing an owner's GitHub repositories to clone. Rendering is in
 //! `repos_page.rs`; the clones and pulls themselves run in [`TaskHub`].
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,6 +47,18 @@ pub(super) struct Manager {
     pub(super) expanded: Option<String>,
     /// Tags to add to (or, with `-`, remove from) the selected repositories.
     pub(super) bulk_tags: Entity<InputState>,
+    /// The workspace's repositories as a virtualized list: the rows the
+    /// filter keeps, then the notes below them.
+    pub(super) list: ListState,
+    /// The rows of the last render, which the list draws from.
+    pub(super) shown: Vec<RepoView>,
+    pub(super) shown_ids: Vec<String>,
+    /// Whether each repository is a git repository, by id: asked of the
+    /// disk once, not on every frame.
+    git: RefCell<HashMap<String, bool>>,
+    /// Explorer's menu for dowse, read from the registry once.
+    #[cfg(windows)]
+    explorer: RefCell<Option<(PathBuf, crate::shell::State)>>,
     pub(super) github: GithubPanel,
     _subscriptions: Vec<Subscription>,
 }
@@ -217,6 +230,12 @@ impl Manager {
             selected: BTreeSet::new(),
             expanded: None,
             bulk_tags,
+            list: ListState::new(0, ListAlignment::Top, px(600.)),
+            shown: Vec::new(),
+            shown_ids: Vec::new(),
+            git: RefCell::default(),
+            #[cfg(windows)]
+            explorer: RefCell::default(),
             github: GithubPanel {
                 owner,
                 filter: remote_filter,
@@ -239,10 +258,48 @@ impl Manager {
     }
 }
 
+impl Manager {
+    /// Whether the repository `id` is a git repository.
+    pub(super) fn is_git(&self, id: &str) -> bool {
+        *self
+            .git
+            .borrow_mut()
+            .entry(id.to_string())
+            .or_insert_with(|| std::path::Path::new(id).join(".git").exists())
+    }
+
+    /// This program, and whether Explorer's menu starts it.
+    #[cfg(windows)]
+    pub(super) fn explorer_state(&self) -> Option<(PathBuf, crate::shell::State)> {
+        let mut cached = self.explorer.borrow_mut();
+        if cached.is_none() {
+            let exe = std::env::current_exe().ok()?;
+            let state = crate::shell::state(&exe);
+            *cached = Some((exe, state));
+        }
+        cached.clone()
+    }
+
+    #[cfg(windows)]
+    pub(super) fn forget_explorer_state(&self) {
+        self.explorer.borrow_mut().take();
+    }
+
+    /// Look at the disk and registry again, as when the page is shown.
+    pub(super) fn forget_disk_state(&self) {
+        self.git.borrow_mut().clear();
+        #[cfg(windows)]
+        self.forget_explorer_state();
+    }
+}
+
 impl SearchApp {
     pub(super) fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.manager.section = section;
-        if section == Section::GitHub && self.manager.github.listing.state == ListingState::NotLoaded {
+        self.manager.forget_disk_state();
+        if section == Section::GitHub
+            && self.manager.github.listing.state == ListingState::NotLoaded
+        {
             self.start_loading_github(cx);
         }
         cx.notify();
@@ -503,7 +560,9 @@ impl SearchApp {
                     .ok();
             });
             sender
-                .send_blocking(ListingEvent::Done(listed.err().map(|error| format!("{error:#}"))))
+                .send_blocking(ListingEvent::Done(
+                    listed.err().map(|error| format!("{error:#}")),
+                ))
                 .ok();
         })
         .detach();

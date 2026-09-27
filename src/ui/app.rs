@@ -179,6 +179,9 @@ impl SearchApp {
     }
 
     pub(super) fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if page == Page::Repositories && self.page != page {
+            self.manager.forget_disk_state();
+        }
         self.page = page;
         if page == Page::Search {
             self.tab()
