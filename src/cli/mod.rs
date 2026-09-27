@@ -301,7 +301,7 @@ fn run_github(args: GithubArgs) -> io::Result<i32> {
 
 fn list_github(
     owner: Option<&str>,
-    limit: usize,
+    limit: Option<usize>,
     filter: &RemoteFilter,
 ) -> io::Result<Vec<RemoteRepo>> {
     let repos = crate::engine::github::list(owner, limit)
@@ -334,11 +334,7 @@ fn clone_request(clone: CloneArgs) -> io::Result<Request> {
                 forks: clone.forks,
                 archived: clone.archived,
             };
-            let listed = list_github(
-                Some(owner),
-                crate::engine::github::DEFAULT_LIST_LIMIT,
-                &filter,
-            )?;
+            let listed = list_github(Some(owner), None, &filter)?;
             let words: Vec<String> = clone.repos.iter().map(|word| word.to_lowercase()).collect();
             let names: Vec<String> = listed
                 .into_iter()

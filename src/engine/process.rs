@@ -49,6 +49,45 @@ pub fn stdout(command: Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Run `command` to completion like [`output`], but stop it (and what it
+/// started) as soon as `cancelled` says so, failing with "cancelled".
+pub fn output_until(mut command: Command, cancelled: &dyn Fn() -> bool) -> Result<Output> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("cannot run {program}; is it installed and on PATH?"))?;
+    let read_all = |mut pipe: Box<dyn std::io::Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).ok();
+            bytes
+        })
+    };
+    let stdout = read_all(Box::new(child.stdout.take().expect("stdout is piped")));
+    let stderr = read_all(Box::new(child.stderr.take().expect("stderr is piped")));
+    let status = loop {
+        if cancelled() {
+            kill_tree(&mut child);
+            bail!("cancelled");
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    };
+    let output = Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
+    if !output.status.success() {
+        bail!("{}", failure(&program, &output.stderr));
+    }
+    Ok(output)
+}
+
 /// Run `command`, passing each line it writes to stderr to `on_line` (git
 /// ends progress lines with `\r`), and stop it when `cancel` is set. Fails
 /// with the last lines of stderr when it fails.
@@ -190,6 +229,27 @@ mod tests {
             "something odd"
         );
         assert_eq!(failure("gh", b""), "gh failed");
+    }
+
+    #[test]
+    fn output_until_returns_output_or_stops_when_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut version = git(dir.path());
+        version.arg("--version");
+        let output = output_until(version, &|| false).unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).starts_with("git version"));
+
+        let mut bad = git(dir.path());
+        bad.arg("log");
+        let error = output_until(bad, &|| false).unwrap_err().to_string();
+        assert!(error.starts_with("fatal:"), "{error}");
+
+        let started = std::time::Instant::now();
+        let mut slow = git(dir.path());
+        slow.arg("--version");
+        let error = output_until(slow, &|| true).unwrap_err().to_string();
+        assert_eq!(error, "cancelled");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

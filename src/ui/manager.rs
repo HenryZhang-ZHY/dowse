@@ -444,10 +444,7 @@ impl SearchApp {
                     } else {
                         None
                     };
-                    (
-                        github::list(owner.as_deref(), github::DEFAULT_LIST_LIMIT),
-                        me,
-                    )
+                    (github::list(owner.as_deref(), None), me)
                 })
                 .await;
             this.update(cx, |this, cx| {

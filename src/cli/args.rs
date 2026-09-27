@@ -244,9 +244,9 @@ pub struct GithubArgs {
     /// words.
     #[arg(long = "filter", value_name = "WORDS")]
     pub filter: Option<String>,
-    /// How many to ask GitHub for.
-    #[arg(short = 'L', long, default_value_t = crate::engine::github::DEFAULT_LIST_LIMIT)]
-    pub limit: usize,
+    /// List at most this many; all of them without it.
+    #[arg(short = 'L', long)]
+    pub limit: Option<usize>,
     /// Print only `owner/name`, one per line.
     #[arg(short = 'q', long)]
     pub quiet: bool,
