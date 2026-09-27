@@ -5,10 +5,12 @@
 
 pub mod config;
 pub mod facets;
+pub mod github;
 pub mod index;
 pub mod language;
 pub mod library;
 pub mod preview;
+pub mod process;
 pub mod query;
 pub mod registry;
 pub mod repo;
