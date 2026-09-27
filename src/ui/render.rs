@@ -1336,6 +1336,15 @@ impl SearchApp {
                             })),
                     )
                     .child(
+                        Button::new("welcome-clone")
+                            .outline()
+                            .icon(Lucide::Github)
+                            .label("Clone from GitHub…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_section(Section::GitHub, window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("welcome-open")
                             .outline()
                             .icon(IconName::FolderOpen)
@@ -1529,10 +1538,11 @@ impl SearchApp {
                 .child(Spinner::new().xsmall())
                 .child(text)
                 .tooltip(|window, cx| Tooltip::new("Show the background tasks").build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.show_page(Page::Repositories, window, cx);
-                    this.show_section(Section::Tasks, cx);
-                }))
+                .on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.open_section(Section::Tasks, window, cx)
+                    }),
+                )
                 .into_any_element(),
         )
     }

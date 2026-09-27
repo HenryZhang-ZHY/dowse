@@ -11,7 +11,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 
-use super::app::SearchApp;
+use super::app::{Page, SearchApp};
 use super::hub::{IndexJob, RepoView};
 use super::tasks::{CloneJob, TaskHub};
 use super::windows::Windows;
@@ -206,7 +206,28 @@ impl SearchApp {
         cx.notify();
     }
 
+    /// Show the repositories page at `section`.
+    pub(super) fn open_section(
+        &mut self,
+        section: Section,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_page(Page::Repositories, window, cx);
+        self.show_section(section, cx);
+    }
+
     // ----- the workspace's repositories ---------------------------------------------
+
+    /// Pull the repositories the scope includes.
+    pub(super) fn pull_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let repos = self.repo_views(cx);
+        let ids: Vec<String> = self
+            .in_scope(&repos)
+            .map(|repo| repo.info.id.clone())
+            .collect();
+        self.pull_repos(ids, window, cx);
+    }
 
     /// The workspace's repositories the filter keeps, sorted by name.
     pub(super) fn managed_repos(&self, cx: &App) -> Vec<RepoView> {

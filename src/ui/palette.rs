@@ -15,6 +15,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::app::{AppCommand, SearchApp};
+use super::manager::Section;
 use super::render::{short_dir, tag_label};
 use super::table::ResultsView;
 use super::windows::Windows;
@@ -389,6 +390,27 @@ impl SearchApp {
             )
             .action(ShowRepositories)
             .keywords(&["tags", "settings"]),
+            command(
+                "Workspace",
+                "Clone from GitHub…",
+                Lucide::Github,
+                |this, w, cx| this.open_section(Section::GitHub, w, cx),
+            )
+            .keywords(&["gh", "download", "organization", "owner"]),
+            command(
+                "Workspace",
+                "Pull Repositories in Scope",
+                Lucide::CloudDownload,
+                |this, w, cx| this.pull_scope(w, cx),
+            )
+            .keywords(&["fetch", "sync", "update", "git"]),
+            command(
+                "Workspace",
+                "Show Background Tasks",
+                Lucide::ListChecks,
+                |this, w, cx| this.open_section(Section::Tasks, w, cx),
+            )
+            .keywords(&["clones", "pulls", "progress", "cancel"]),
             command(
                 "Workspace",
                 "Update Indexes in Scope",

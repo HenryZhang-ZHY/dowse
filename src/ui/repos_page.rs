@@ -954,7 +954,21 @@ impl SearchApp {
                                     let status = this.remote_status(repo, &statuses, root.as_ref());
                                     let checked =
                                         this.manager.github.selected.contains(&repo.full_name);
-                                    render_remote_row(row, repo, status, checked, cx)
+                                    // A clone this workspace lacks, such as one made from
+                                    // the command line or another window, can join it.
+                                    let joinable = (status == RemoteStatus::Cloned)
+                                        .then_some(root.as_ref())
+                                        .flatten()
+                                        .map(|root| {
+                                            github::clone_destination(root, &repo.full_name)
+                                        })
+                                        .filter(|folder| {
+                                            let id = dowse::engine::repo::identity(folder);
+                                            !this
+                                                .members
+                                                .contains(&id.to_string_lossy().into_owned())
+                                        });
+                                    render_remote_row(row, repo, status, checked, joinable, cx)
                                 })
                                 .collect::<Vec<_>>()
                         }),
@@ -1398,6 +1412,7 @@ fn render_remote_row(
     repo: &RemoteRepo,
     status: RemoteStatus,
     checked: bool,
+    joinable: Option<PathBuf>,
     cx: &mut Context<SearchApp>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -1427,12 +1442,24 @@ fn render_remote_row(
         .unwrap_or_default();
     let status_element: AnyElement = match &status {
         RemoteStatus::Available => div().into_any_element(),
-        RemoteStatus::Cloned => h_flex()
-            .gap_1()
-            .text_color(theme.success)
-            .child(Icon::new(IconName::Check).xsmall())
-            .child("Cloned")
-            .into_any_element(),
+        RemoteStatus::Cloned => match joinable {
+            Some(folder) => Button::new(("join-workspace", row))
+                .ghost()
+                .xsmall()
+                .icon(IconName::Plus)
+                .label("Add to Workspace")
+                .tooltip("Cloned already; add it to this workspace")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.add_repositories(vec![folder.clone()], window, cx)
+                }))
+                .into_any_element(),
+            None => h_flex()
+                .gap_1()
+                .text_color(theme.success)
+                .child(Icon::new(IconName::Check).xsmall())
+                .child("Cloned")
+                .into_any_element(),
+        },
         RemoteStatus::Queued => div().text_color(muted).child("Queued").into_any_element(),
         RemoteStatus::Cloning(fraction) => h_flex()
             .gap_1p5()
@@ -1544,7 +1571,7 @@ fn render_remote_row(
         )
         .child(
             div()
-                .w(px(110.))
+                .w(px(150.))
                 .flex_none()
                 .flex()
                 .justify_end()
