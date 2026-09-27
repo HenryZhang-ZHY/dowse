@@ -7,6 +7,11 @@ you develop in. [tgrep](https://github.com/microsoft/tgrep)'s trigram index is t
 engine and [GPUI](https://github.com/zed-industries/zed) (through
 [GPUI Kit](https://gpui-kit.com)) the UI.
 
+![dowse searching 12 public repositories as the query is typed, narrowing to Rust with a facet, then showing the results as a table](docs/images/dowse-search.gif)
+
+Twelve public repositories, 45,629 files: results arrive as the query is typed, a
+facet narrows them to Rust, and the table lays them out one row per line.
+
 ## Features
 
 - **Many repositories, one search box.** Add repositories one by one, or pick a folder
@@ -24,6 +29,8 @@ engine and [GPUI](https://github.com/zed-industries/zed) (through
   their indexes, add or remove tags (`-tag` removes one), set how often they are
   pulled, or take them out of the workspace. A row opens to its tags and pull
   settings, and shows its index and how its last pull went.
+
+  ![The repositories page: cloned repositories with their branch, owner and mirror tags, and how many files each index holds](docs/images/repositories-page.webp)
 - **Clone from GitHub, many at once.** The page's GitHub section lists an owner's
   repositories (your own unless you name a user or organization) through the
   [GitHub CLI](https://cli.github.com), so dowse never handles your sign-in: run
@@ -65,6 +72,8 @@ engine and [GPUI](https://github.com/zed-industries/zed) (through
 - **Facets narrow the results** without changing the scope: repository, branch, each
   tag group, language and top-level directory, each counted under the others'
   filters, as on grep.app.
+
+  ![Results for trigram index -path:test across tgrep, Zoekt, Google codesearch, Hound, Django and Go, with repository, branch, owner and language facets](docs/images/search-across-repositories.webp)
 - **GitHub code search syntax**, as you type. Terms combine per file, not per line:
   `parse config` finds files containing both, wherever they are, and shows the lines
   with either.
@@ -106,6 +115,8 @@ engine and [GPUI](https://github.com/zed-industries/zed) (through
   or as Markdown. Rows are the kept lines: up to 200 per file and about 20,000 in all.
   When every row comes from one repository, the table hides its name and branch;
   exports always include them.
+
+  ![The table view: one row per Cargo.toml version line, with a version column from the named capture group](docs/images/table-view-capture-groups.webp)
 - **Search tabs.** Keep several searches open and switch between them without
   running them again: `Ctrl+T` opens a tab, `Ctrl+W` closes it, `Ctrl+Tab` and
   `Ctrl+Shift+Tab` (or `Ctrl+PageDown/PageUp`) step through them, and a middle click
@@ -116,6 +127,8 @@ engine and [GPUI](https://github.com/zed-industries/zed) (through
   waiting for an editor to start. Drag the divider to resize it and `Esc` closes it.
   `F4` and `Shift+F4` step through the matches, on into the next or previous file.
   Each tab keeps its own preview. The preview is for reading; nothing is edited.
+
+  ![The preview pane showing a whole file beside the results, with the query's matches marked](docs/images/file-preview.webp)
 - **Open in your editor** from the preview's "Open in Editor" button (at the chosen
   line), by double-clicking a line there, or straight from the results with
   `Ctrl+Click`. VS Code, Cursor, Zed or Sublime Text is used when found on `PATH`,
@@ -286,6 +299,7 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | `src/launch.rs` | Launching the desktop app from the command line. |
 | `src/bin/dowse-cli.rs` | The console program installed as `dowse.com` on Windows. |
 | `docs/agent-guide.md` | The guide `dowse guide` prints for coding agents. |
+| `docs/images/` | The screenshots and recording in this README. |
 | `src/shell.rs` | Explorer integration on Windows. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `src/fuzzy.rs` | Fuzzy matching for the command palette. |
