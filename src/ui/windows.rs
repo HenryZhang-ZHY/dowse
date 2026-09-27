@@ -11,9 +11,10 @@ use super::app::{SearchApp, TabsOpening};
 use super::devtools;
 use super::hub::RepoHub;
 use super::remote::Remote;
+use super::tasks::TaskHub;
 use dowse::engine::config::ConfigDir;
 use dowse::engine::repo;
-use dowse::engine::session::{Session, WindowSession};
+use dowse::engine::session::{CloneDefaults, Session, WindowSession};
 use dowse::launch::Command;
 
 /// How far each new window is offset from the previous one.
@@ -372,7 +373,9 @@ impl Windows {
         if before > 0 {
             devtools::close(cx);
         }
-        if Remote::keeps_app_running(cx) {
+        if TaskHub::keeps_app_running(cx) {
+            log::info!("staying in the background until the tasks finish");
+        } else if Remote::keeps_app_running(cx) {
             log::info!("staying in the background for the command line");
         } else if !devtools::is_open(cx) {
             cx.quit();
@@ -396,6 +399,19 @@ impl Windows {
 
     pub(super) fn recent(cx: &App) -> Vec<PathBuf> {
         cx.global::<Self>().session.recent.clone()
+    }
+
+    /// What the last clone from GitHub used.
+    pub(super) fn clone_defaults(cx: &App) -> CloneDefaults {
+        cx.global::<Self>().session.clone.clone()
+    }
+
+    pub(super) fn set_clone_defaults(defaults: CloneDefaults, cx: &mut App) {
+        let windows = cx.global_mut::<Self>();
+        if windows.session.clone != defaults {
+            windows.session.clone = defaults;
+            Self::save(cx);
+        }
     }
 
     /// The scope last used with the saved workspace `file`.

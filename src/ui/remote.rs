@@ -19,6 +19,7 @@ use gpui_kit::*;
 
 use super::devtools;
 use super::hub::{IndexActivity, IndexJob, RepoHub};
+use super::tasks::TaskHub;
 use super::windows::Windows;
 use dowse::diagnostics::log as app_log;
 use dowse::diagnostics::metrics::{Origin, SearchRecord, metrics};
@@ -106,7 +107,11 @@ impl Remote {
                 }
             });
         }
-        if Windows::count(cx) == 0 && !Self::keeps_app_running(cx) && !devtools::is_open(cx) {
+        if Windows::count(cx) == 0
+            && !Self::keeps_app_running(cx)
+            && !TaskHub::keeps_app_running(cx)
+            && !devtools::is_open(cx)
+        {
             log::info!("no windows and no command-line requests for a while; quitting");
             cx.quit();
         }

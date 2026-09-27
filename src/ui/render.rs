@@ -24,14 +24,17 @@ use super::CONTEXT;
 use super::app::{AppCommand, Page, SearchApp};
 use super::highlight::LineStyles;
 use super::hub::{IndexActivity, IndexJob, RepoView};
+use super::manager::Section;
 use super::table::ResultsView;
 use super::tabs::file_key;
+use super::tasks::TaskHub;
 use super::windows::Windows;
 use crate::format;
 use dowse::engine::facets::FacetKind;
 use dowse::engine::repo::{self, BRANCH_GROUP};
 use dowse::engine::search::{FileMatch, Snippet, SnippetLine};
 use dowse::engine::table::ExportFormat;
+use dowse::engine::tasks::{TaskKind, TaskState};
 use dowse::engine::workspace;
 
 /// Matching lines shown per file before "Show more".
@@ -1389,9 +1392,13 @@ impl SearchApp {
             .bg(theme.status_bar)
             .text_xs()
             .text_color(muted);
+        let tasks = self.render_task_status(cx);
         let repos = self.repo_views(cx);
         if repos.is_empty() {
-            return bar.child("No repositories yet");
+            return bar
+                .child("No repositories yet")
+                .child(div().flex_1())
+                .children(tasks);
         }
 
         let in_scope: Vec<&RepoView> = self.in_scope(&repos).collect();
@@ -1438,6 +1445,7 @@ impl SearchApp {
             in_scope.len()
         ))
         .child(div().flex_1())
+        .children(tasks)
         .when_some(activity, |bar, activity| {
             bar.child(Spinner::new().xsmall()).child(activity)
         })
@@ -1480,6 +1488,52 @@ impl SearchApp {
                 .on_click(
                     cx.listener(|this, _, _, cx| this.queue_scope_indexes(IndexJob::Update, cx)),
                 ),
+        )
+    }
+}
+
+impl SearchApp {
+    /// Clones and pulls in the background, opening the task list.
+    fn render_task_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let infos = TaskHub::global(cx).read(cx).infos();
+        let running: Vec<_> = infos
+            .iter()
+            .filter(|info| info.state == TaskState::Running)
+            .collect();
+        let queued = infos
+            .iter()
+            .filter(|info| info.state == TaskState::Queued)
+            .count();
+        if running.is_empty() && queued == 0 {
+            return None;
+        }
+        let verb = |kind: TaskKind| match kind {
+            TaskKind::Clone => "Cloning",
+            TaskKind::Pull => "Pulling",
+        };
+        let text = match running.as_slice() {
+            [one] => format!("{} {}", verb(one.kind), self.task_title(one, cx)),
+            many => format!("{} tasks running", many.len()),
+        };
+        let text = if queued > 0 {
+            format!("{text} · {queued} queued")
+        } else {
+            text
+        };
+        Some(
+            h_flex()
+                .id("task-status")
+                .gap_1()
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .child(Spinner::new().xsmall())
+                .child(text)
+                .tooltip(|window, cx| Tooltip::new("Show the background tasks").build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_page(Page::Repositories, window, cx);
+                    this.show_section(Section::Tasks, cx);
+                }))
+                .into_any_element(),
         )
     }
 }

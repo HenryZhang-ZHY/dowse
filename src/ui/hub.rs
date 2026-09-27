@@ -18,6 +18,7 @@ use dowse::engine::index::{Corpus, IndexStatus, IndexUpdate, RepoIndex};
 use dowse::engine::library::{Library, LibraryEntry};
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::SearchSource;
+use dowse::engine::sync::Interval;
 use dowse::engine::watch::ChangeTracker;
 
 /// How often change counts and checked-out branches are refreshed.
@@ -233,6 +234,65 @@ impl RepoHub {
         cx.emit(HubEvent::MetadataChanged);
         cx.notify();
         self.save()
+    }
+
+    /// Pull the repository every `every`, or never.
+    pub(super) fn set_pull_every(
+        &mut self,
+        id: &str,
+        every: Option<Interval>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if !self.library.set_pull_every(Path::new(id), every) {
+            return Ok(());
+        }
+        if let Some(state) = self.open.get_mut(id) {
+            let mut info = (*state.info).clone();
+            info.pull_every = every;
+            state.info = Arc::new(info);
+        }
+        cx.emit(HubEvent::MetadataChanged);
+        cx.notify();
+        self.save()
+    }
+
+    /// Note that dowse tried to pull the repository at `time`.
+    pub(super) fn note_pulled(&mut self, id: &str, time: SystemTime) {
+        self.library.set_pulled_at(Path::new(id), time);
+        self.save().ok();
+    }
+
+    /// A clone that just finished: known to the library from now on, with
+    /// `tags` added to any it has and pulled every `pull_every` when given.
+    /// Returns its id.
+    pub(super) fn adopt(
+        &mut self,
+        folder: &Path,
+        tags: &[String],
+        pull_every: Option<Interval>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<String> {
+        let id = self
+            .register(&[folder.to_path_buf()], false)?
+            .into_iter()
+            .next()
+            .expect("one folder registers one repository");
+        let mut merged = self.library_tags(&id);
+        for tag in tags {
+            if !merged.contains(tag) {
+                merged.push(tag.clone());
+            }
+        }
+        self.set_tags(&id, merged, cx)?;
+        if pull_every.is_some() {
+            self.set_pull_every(&id, pull_every, cx)?;
+        }
+        Ok(id)
+    }
+
+    /// Whether some window or request has the repository open.
+    pub(super) fn is_open(&self, id: &str) -> bool {
+        self.open.contains_key(id)
     }
 
     /// Every repository known, open or not.

@@ -87,6 +87,29 @@ impl SearchApp {
         window.push_notification(message, cx);
     }
 
+    /// Add repositories that just joined the library, such as finished
+    /// clones, without a notification each.
+    pub(super) fn adopt_repositories(
+        &mut self,
+        ids: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let added: Vec<String> = ids
+            .into_iter()
+            .filter(|id| !self.members.contains(id))
+            .collect();
+        if added.is_empty() {
+            return;
+        }
+        let mut members = self.members.clone();
+        members.extend(added);
+        self.set_members(members, cx);
+        self.sync_tag_inputs(window, cx);
+        self.persist_members(window, cx);
+        self.schedule_search(true, cx);
+    }
+
     pub(super) fn prompt_for_repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -151,7 +174,12 @@ impl SearchApp {
         );
     }
 
-    fn remove_ids(&mut self, ids: &[String], window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn remove_ids(
+        &mut self,
+        ids: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let members: Vec<String> = self
             .members
             .iter()

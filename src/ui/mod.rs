@@ -6,6 +6,7 @@ mod app;
 mod devtools;
 mod highlight;
 mod hub;
+mod manager;
 mod palette;
 mod preview;
 mod remote;
@@ -14,6 +15,7 @@ mod repos;
 mod repos_page;
 mod table;
 mod tabs;
+mod tasks;
 mod windows;
 mod workspace;
 
@@ -68,6 +70,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
     // running for the command line.
     cx.set_quit_mode(QuitMode::Explicit);
     windows::Windows::init(config_root, cx);
+    tasks::TaskHub::init(cx);
     remote::Remote::init(cx);
     cx.on_window_closed(|cx, _| windows::Windows::closed(cx))
         .detach();

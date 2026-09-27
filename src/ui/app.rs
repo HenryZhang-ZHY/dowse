@@ -17,8 +17,10 @@ use gpui_kit::*;
 
 use super::highlight::{self, Highlighters, LineStyles};
 use super::hub::{IndexJob, RepoHub};
+use super::manager::Manager;
 use super::repos::TagInputs;
 use super::tabs::SearchTab;
+use super::tasks::TaskHub;
 use super::windows::{Opening, Windows};
 use super::{
     AddRepository, CloseTab, FocusPathFilter, FocusSearch, NewTab, NewWorkspace, NextTab,
@@ -50,6 +52,8 @@ pub struct SearchApp {
     /// Ids of the repositories this window uses, each acquired from the hub.
     pub(super) members: Vec<String>,
     pub(super) tag_inputs: TagInputs,
+    /// The repositories page.
+    pub(super) manager: Manager,
     pub(super) scope: Scope,
     /// Open searches; never empty.
     pub(super) tabs: Vec<SearchTab>,
@@ -81,9 +85,11 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) -> Self {
         let hub = RepoHub::global(cx);
+        let tasks = TaskHub::global(cx);
         let subscriptions = vec![
             cx.subscribe_in(&hub, window, Self::on_hub_event),
             cx.observe(&hub, |_, _, cx| cx.notify()),
+            cx.observe(&tasks, |_, _, cx| cx.notify()),
             cx.observe_global::<Theme>(|this, cx| this.theme_changed(cx)),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -107,6 +113,7 @@ impl SearchApp {
             close_confirmed: false,
             members: Vec::new(),
             tag_inputs: TagInputs::default(),
+            manager: Manager::new(window, cx),
             scope: Scope::default(),
             tabs: Vec::new(),
             active_tab: 0,

@@ -24,6 +24,18 @@ pub fn plural(value: usize, singular: &str, plural: &str) -> String {
     )
 }
 
+/// A size GitHub gives in kilobytes: `512 KB`, `1.5 MB`, `2.3 GB`.
+pub fn kilobytes(kb: u64) -> String {
+    let kb = kb as f64;
+    if kb < 1024.0 {
+        format!("{kb:.0} KB")
+    } else if kb < 1024.0 * 1024.0 {
+        format!("{:.1} MB", kb / 1024.0)
+    } else {
+        format!("{:.1} GB", kb / 1024.0 / 1024.0)
+    }
+}
+
 pub fn duration(elapsed: Duration) -> String {
     let millis = elapsed.as_secs_f64() * 1000.0;
     if millis < 10.0 {
@@ -69,6 +81,13 @@ mod tests {
         assert_eq!(ago(before(7200), now), "2 h ago");
         assert_eq!(ago(before(200_000), now), "2 d ago");
         assert_eq!(ago(now + Duration::from_secs(10), now), "just now");
+    }
+
+    #[test]
+    fn formats_sizes() {
+        assert_eq!(kilobytes(511), "511 KB");
+        assert_eq!(kilobytes(1536), "1.5 MB");
+        assert_eq!(kilobytes(3 * 1024 * 1024), "3.0 GB");
     }
 
     #[test]
