@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::diagnostics::log::LogLevel;
+use crate::engine::github::CloneMode;
+use crate::engine::sync::Interval;
 use crate::engine::table::ExportFormat;
 use crate::ipc::protocol::ScopeSpec;
 
@@ -49,10 +51,12 @@ Examples:
 Exit status: 0 when something matched, 1 when nothing did, 2 on error."
     )]
     Search(SearchArgs),
-    /// List the repositories dowse knows, add them and tag them.
+    /// List the repositories dowse knows, add, clone, pull and tag them.
     Repos(ReposArgs),
     /// Bring the indexes of repositories up to date.
     Index(IndexArgs),
+    /// Show the app's background tasks (clones and pulls), or cancel them.
+    Tasks(TasksArgs),
     /// Show what the running app is doing.
     Status(JsonArg),
     /// Quit the running app, closing its windows.
@@ -184,6 +188,130 @@ pub enum ReposAction {
         #[arg(short, long = "remove", value_name = "TAG")]
         remove: Vec<String>,
     },
+    /// List an owner's repositories on GitHub, through the GitHub CLI (gh).
+    Github(GithubArgs),
+    /// Clone GitHub repositories in the background, into <DIR>/<owner>/<name>,
+    /// and add them to the library.
+    #[command(after_help = "\
+Examples:
+  dowse repos clone alice/api alice/web --into ~/mirrors -t mirror
+  dowse repos clone --from my-org --into ~/mirrors --pull-every 1h --wait
+  dowse repos clone --from my-org cli     # those whose names contain cli")]
+    Clone(CloneArgs),
+    /// Pull repositories in the background: fetch, then fast-forward the
+    /// default branch when it is checked out and has no local changes or
+    /// commits.
+    Pull {
+        /// Repositories by name or path; without any, those in scope.
+        #[arg(value_name = "REPO")]
+        repos: Vec<String>,
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Wait until the pulls finish.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Pull repositories on an interval, such as 15m, 1h or 3d, while the
+    /// app runs; or stop.
+    Sync {
+        #[arg(required = true, value_name = "REPO")]
+        repos: Vec<String>,
+        /// How often, such as 15m, 1h or 3d.
+        #[arg(
+            long,
+            value_name = "INTERVAL",
+            required_unless_present = "off",
+            conflicts_with = "off"
+        )]
+        every: Option<Interval>,
+        /// Stop pulling them.
+        #[arg(long)]
+        off: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct GithubArgs {
+    /// A user or organization; without one, the signed-in user.
+    pub owner: Option<String>,
+    /// Include forks.
+    #[arg(long)]
+    pub forks: bool,
+    /// Include archived repositories.
+    #[arg(long)]
+    pub archived: bool,
+    /// Only repositories whose name, description or language contain these
+    /// words.
+    #[arg(long = "filter", value_name = "WORDS")]
+    pub filter: Option<String>,
+    /// How many to ask GitHub for.
+    #[arg(short = 'L', long, default_value_t = crate::engine::github::DEFAULT_LIST_LIMIT)]
+    pub limit: usize,
+    /// Print only `owner/name`, one per line.
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct CloneArgs {
+    /// Repositories as `owner/name`. With `--from`, words that the names of
+    /// the owner's repositories must contain.
+    #[arg(value_name = "REPO", required_unless_present = "from")]
+    pub repos: Vec<String>,
+    /// Clone the repositories of this user or organization, without forks
+    /// or archived ones unless asked.
+    #[arg(long, value_name = "OWNER")]
+    pub from: Option<String>,
+    /// With `--from`, include forks.
+    #[arg(long, requires = "from")]
+    pub forks: bool,
+    /// With `--from`, include archived repositories.
+    #[arg(long, requires = "from")]
+    pub archived: bool,
+    /// The folder clones go under; the last one used when not given.
+    #[arg(long, value_name = "DIR")]
+    pub into: Option<PathBuf>,
+    /// How much history to fetch: blobless (all history, file contents on
+    /// demand), shallow (the latest commit) or full.
+    #[arg(long, default_value = "blobless", value_parser = parse_mode)]
+    pub mode: CloneMode,
+    /// Tag the clones, besides `owner:<owner>`.
+    #[arg(short, long = "tag", value_name = "TAG")]
+    pub tags: Vec<String>,
+    /// Pull the clones on this interval, such as 1h.
+    #[arg(long, value_name = "INTERVAL")]
+    pub pull_every: Option<Interval>,
+    /// Wait until the clones finish.
+    #[arg(long)]
+    pub wait: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TasksArgs {
+    #[command(subcommand)]
+    pub action: Option<TasksAction>,
+    /// Wait until every task has finished.
+    #[arg(long)]
+    pub wait: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TasksAction {
+    /// Cancel tasks by id, or all of them.
+    Cancel {
+        #[arg(value_name = "ID", required_unless_present = "all")]
+        ids: Vec<u64>,
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+fn parse_mode(text: &str) -> Result<CloneMode, String> {
+    CloneMode::parse(text).ok_or_else(|| "expected blobless, shallow or full".into())
 }
 
 #[derive(Debug, Args)]
@@ -308,6 +436,57 @@ mod tests {
         assert!(is_subcommand("repos"));
         assert!(!is_subcommand("src"));
         assert!(!is_subcommand("--add"));
+    }
+
+    #[test]
+    fn clone_pull_and_sync_read_their_options() {
+        let Cli {
+            command:
+                CliCommand::Repos(ReposArgs {
+                    action: Some(ReposAction::Clone(clone)),
+                    ..
+                }),
+        } = parse(&[
+            "repos",
+            "clone",
+            "a/b",
+            "--into",
+            "/m",
+            "--mode",
+            "shallow",
+            "--pull-every",
+            "1h",
+        ])
+        .unwrap()
+        else {
+            panic!("expected repos clone");
+        };
+        assert_eq!(clone.repos, ["a/b"]);
+        assert_eq!(clone.mode, CloneMode::Shallow);
+        assert_eq!(
+            clone.pull_every.map(|every| every.to_string()).as_deref(),
+            Some("1h")
+        );
+        assert!(
+            parse(&["repos", "clone"]).is_err(),
+            "needs repositories or --from"
+        );
+        assert!(parse(&["repos", "clone", "--from", "org"]).is_ok());
+        assert!(parse(&["repos", "clone", "a/b", "--mode", "deep"]).is_err());
+        assert!(
+            parse(&["repos", "clone", "a/b", "--forks"]).is_err(),
+            "--forks needs --from"
+        );
+        assert!(
+            parse(&["repos", "sync", "api"]).is_err(),
+            "needs --every or --off"
+        );
+        assert!(parse(&["repos", "sync", "api", "--every", "1m"]).is_err());
+        assert!(parse(&["repos", "sync", "api", "--every", "1h", "--off"]).is_err());
+        assert!(parse(&["repos", "sync", "api", "--off"]).is_ok());
+        assert!(parse(&["repos", "pull", "--here", "--wait"]).is_ok());
+        assert!(parse(&["tasks", "cancel"]).is_err());
+        assert!(parse(&["tasks", "cancel", "--all"]).is_ok());
     }
 
     #[test]

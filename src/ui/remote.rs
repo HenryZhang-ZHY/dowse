@@ -19,15 +19,19 @@ use gpui_kit::*;
 
 use super::devtools;
 use super::hub::{IndexActivity, IndexJob, RepoHub};
-use super::tasks::TaskHub;
+use super::tasks::{CloneJob, TaskHub};
 use super::windows::Windows;
 use dowse::diagnostics::log as app_log;
 use dowse::diagnostics::metrics::{Origin, SearchRecord, metrics};
+use dowse::engine::github::{self, CloneMode};
 use dowse::engine::index::{IndexStatus, RepoIndex};
 use dowse::engine::query::CompiledQuery;
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::{self, SearchLimits};
+use dowse::engine::session::CloneDefaults;
+use dowse::engine::sync::Interval;
 use dowse::engine::table::ResultTable;
+use dowse::engine::tasks::TaskState;
 use dowse::ipc::protocol::{
     AppStatus, Frame, LogsRequest, RepoStatus, Request, RequestEnvelope, ScopeSpec, SearchRequest,
     SearchResponse,
@@ -158,6 +162,34 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
         }
         Request::AddRepos { folders, tags } => add_repos(&folders, &tags, cx),
         Request::Tag { repo, add, remove } => tag(&repo, &add, &remove, &cwd, cx),
+        Request::Clone {
+            repos,
+            root,
+            mode,
+            tags,
+            pull_every,
+            wait,
+        } => {
+            let job = CloneRequest {
+                repos,
+                root,
+                mode,
+                tags,
+                pull_every,
+            };
+            clone(job, wait, reply.clone(), cx);
+            Ok(Vec::new())
+        }
+        Request::Pull { repos, scope, wait } => {
+            pull(&repos, &scope, wait, &cwd, reply.clone(), cx);
+            Ok(Vec::new())
+        }
+        Request::SetPullEvery { repos, every } => set_pull_every(&repos, every, &cwd, cx),
+        Request::Tasks { wait } => {
+            tasks(wait, reply.clone(), cx);
+            Ok(Vec::new())
+        }
+        Request::CancelTasks { ids, all } => Ok(vec![cancel_tasks(&ids, all, cx)]),
         Request::Index { scope, wait, full } => {
             let job = if full {
                 IndexJob::Rebuild
@@ -208,6 +240,11 @@ fn kind(request: &Request) -> &'static str {
         Request::Status => "status",
         Request::AddRepos { .. } => "repos add",
         Request::Tag { .. } => "repos tag",
+        Request::Clone { .. } => "repos clone",
+        Request::Pull { .. } => "repos pull",
+        Request::SetPullEvery { .. } => "repos sync",
+        Request::Tasks { .. } => "tasks",
+        Request::CancelTasks { .. } => "tasks cancel",
         Request::Index { .. } => "index",
         Request::Logs(_) => "dev logs",
         Request::Metrics => "dev metrics",
@@ -224,6 +261,15 @@ fn describe(request: &Request) -> String {
         Request::Status => "status".into(),
         Request::AddRepos { folders, .. } => format!("add {} folders", folders.len()),
         Request::Tag { repo, .. } => format!("tag {repo}"),
+        Request::Clone { repos, .. } => format!("clone {} repositories", repos.len()),
+        Request::Pull { repos, .. } => format!("pull {}", repos.join(", ")),
+        Request::SetPullEvery { repos, every } => format!(
+            "pull {} {}",
+            repos.join(", "),
+            every.map_or("never".to_string(), |every| format!("every {every}"))
+        ),
+        Request::Tasks { .. } => "tasks".into(),
+        Request::CancelTasks { .. } => "cancel tasks".into(),
         Request::Index { .. } => "index".into(),
         Request::Logs(_) => "logs".into(),
         Request::Quit => "quit".into(),
@@ -398,6 +444,7 @@ fn repo_status(hub: &RepoHub, info: &RepoInfo) -> RepoStatus {
         files,
         indexed_at_ms,
         changed_files,
+        pull_every: info.pull_every,
     }
 }
 
@@ -439,6 +486,20 @@ fn add_repos(
     ))])
 }
 
+/// The id of the library's repository called `repo`, or at that path.
+fn resolve(repo: &str, cwd: &Path, cx: &App) -> Result<String, String> {
+    let hub = RepoHub::global(cx);
+    let library = hub.read(cx).library();
+    let by_path = repo::identity(&cwd.join(repo));
+    library
+        .repos
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(repo))
+        .or_else(|| library.repos.iter().find(|entry| entry.path == by_path))
+        .map(|entry| entry.path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("no repository named {repo}; `dowse repos` lists them"))
+}
+
 fn tag(
     repo: &str,
     add: &[String],
@@ -447,17 +508,7 @@ fn tag(
     cx: &mut App,
 ) -> Result<Vec<Frame>, String> {
     let hub = RepoHub::global(cx);
-    let id = {
-        let library = hub.read(cx).library();
-        let by_path = repo::identity(&cwd.join(repo));
-        library
-            .repos
-            .iter()
-            .find(|entry| entry.name.eq_ignore_ascii_case(repo))
-            .or_else(|| library.repos.iter().find(|entry| entry.path == by_path))
-            .map(|entry| entry.path.to_string_lossy().into_owned())
-            .ok_or_else(|| format!("no repository named {repo}; `dowse repos` lists them"))?
-    };
+    let id = resolve(repo, cwd, cx)?;
     let mut tags = hub.read(cx).library_tags(&id);
     tags.retain(|tag| !remove.contains(tag));
     for tag in add {
@@ -546,6 +597,255 @@ fn index(
         reply.send(Frame::Done).await.ok();
     })
     .detach();
+}
+
+// ----- clones, pulls and tasks ----------------------------------------------------
+
+struct CloneRequest {
+    repos: Vec<String>,
+    root: Option<std::path::PathBuf>,
+    mode: CloneMode,
+    tags: Vec<String>,
+    pull_every: Option<Interval>,
+}
+
+/// Queue clones into `<root>/<owner>/<name>`. Folders already cloned join
+/// the library at once.
+fn clone(request: CloneRequest, wait: bool, reply: Sender<Frame>, cx: &mut App) {
+    let defaults = Windows::clone_defaults(cx);
+    let Some(root) = request.root.clone().or(defaults.root.clone()) else {
+        reply
+            .send_blocking(Frame::Error(
+                "say where to clone with --into <folder>; later clones default to it".into(),
+            ))
+            .ok();
+        return;
+    };
+    Windows::set_clone_defaults(
+        CloneDefaults {
+            root: Some(root.clone()),
+            mode: request.mode,
+            owner: defaults.owner,
+        },
+        cx,
+    );
+    let hub = RepoHub::global(cx);
+    let mut jobs = Vec::new();
+    let mut present = Vec::new();
+    for full_name in &request.repos {
+        let owner = full_name.split('/').next().unwrap_or_default();
+        let destination = github::clone_destination(&root, full_name);
+        let mut tags = vec![format!("owner:{owner}")];
+        tags.extend(request.tags.iter().cloned());
+        if destination.join(".git").exists() {
+            let adopted = hub.update(cx, |hub, cx| {
+                hub.adopt(&destination, &tags, request.pull_every, cx)
+            });
+            if let Err(error) = adopted {
+                reply.send_blocking(Frame::Error(format!("{error:#}"))).ok();
+                return;
+            }
+            present.push(full_name.clone());
+            continue;
+        }
+        jobs.push(CloneJob {
+            full_name: full_name.clone(),
+            destination,
+            mode: request.mode,
+            tags,
+            pull_every: request.pull_every,
+            window: None,
+        });
+    }
+    if !present.is_empty() {
+        reply
+            .send_blocking(Frame::Message(format!(
+                "already cloned, now in the library: {}",
+                present.join(", ")
+            )))
+            .ok();
+    }
+    let count = jobs.len();
+    let ids = TaskHub::global(cx).update(cx, |tasks, cx| tasks.clone_repos(jobs, cx));
+    if count > 0 {
+        let skipped = count - ids.len();
+        reply
+            .send_blocking(Frame::Message(format!(
+                "cloning {} into {}{}{}",
+                crate::format::plural(ids.len(), "repository", "repositories"),
+                root.display(),
+                if skipped > 0 {
+                    format!(" ({skipped} already queued)")
+                } else {
+                    String::new()
+                },
+                if wait {
+                    ""
+                } else {
+                    "; `dowse tasks` shows how they are doing"
+                }
+            )))
+            .ok();
+    }
+    finish_tasks(ids, wait, reply, cx);
+}
+
+/// Queue pulls of the named repositories, or of those in scope.
+fn pull(
+    repos: &[String],
+    scope: &ScopeSpec,
+    wait: bool,
+    cwd: &Path,
+    reply: Sender<Frame>,
+    cx: &mut App,
+) {
+    let ids: Result<Vec<String>, String> = if repos.is_empty() {
+        select(scope, cwd, cx).map(|repos| repos.iter().map(|repo| repo.id.clone()).collect())
+    } else {
+        repos.iter().map(|repo| resolve(repo, cwd, cx)).collect()
+    };
+    let ids = match ids {
+        Ok(ids) => ids,
+        Err(error) => {
+            reply.send_blocking(Frame::Error(error)).ok();
+            return;
+        }
+    };
+    let (pullable, plain): (Vec<String>, Vec<String>) = ids
+        .into_iter()
+        .partition(|id| Path::new(id).join(".git").exists());
+    if !plain.is_empty() {
+        reply
+            .send_blocking(Frame::Message(format!(
+                "not git repositories, so not pulled: {}",
+                plain.join(", ")
+            )))
+            .ok();
+    }
+    let tasks = TaskHub::global(cx).update(cx, |tasks, cx| tasks.pull(&pullable, cx));
+    reply
+        .send_blocking(Frame::Message(format!(
+            "pulling {}",
+            crate::format::plural(pullable.len(), "repository", "repositories")
+        )))
+        .ok();
+    finish_tasks(tasks, wait, reply, cx);
+}
+
+/// With `wait`, report each task as it finishes, failing when one did;
+/// otherwise answer at once.
+fn finish_tasks(ids: Vec<u64>, wait: bool, reply: Sender<Frame>, cx: &mut App) {
+    if !wait || ids.is_empty() {
+        reply.send_blocking(Frame::Done).ok();
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let mut pending = ids;
+        let mut failed = 0;
+        while !pending.is_empty() {
+            cx.background_executor().timer(WAIT_STEP * 8).await;
+            let finished = cx.update(|cx| {
+                let infos = TaskHub::global(cx).read(cx).infos();
+                let mut finished = Vec::new();
+                pending.retain(|id| match infos.iter().find(|info| info.id == *id) {
+                    Some(info) if info.state.is_finished() => {
+                        finished.push(info.clone());
+                        false
+                    }
+                    Some(_) => true,
+                    None => false,
+                });
+                finished
+            });
+            for info in finished {
+                let line = match &info.state {
+                    TaskState::Done { message } => format!("{}: {message}", info.title),
+                    TaskState::Failed { error } => {
+                        failed += 1;
+                        format!("{}: failed: {error}", info.title)
+                    }
+                    _ => {
+                        failed += 1;
+                        format!("{}: cancelled", info.title)
+                    }
+                };
+                if reply.send(Frame::Message(line)).await.is_err() {
+                    return;
+                }
+            }
+        }
+        let last = if failed > 0 {
+            Frame::Error(format!(
+                "{} did not finish",
+                crate::format::plural(failed, "task", "tasks")
+            ))
+        } else {
+            Frame::Done
+        };
+        reply.send(last).await.ok();
+    })
+    .detach();
+}
+
+fn set_pull_every(
+    repos: &[String],
+    every: Option<Interval>,
+    cwd: &Path,
+    cx: &mut App,
+) -> Result<Vec<Frame>, String> {
+    let ids: Vec<String> = repos
+        .iter()
+        .map(|repo| resolve(repo, cwd, cx))
+        .collect::<Result<_, _>>()?;
+    if let Some(plain) = ids.iter().find(|id| !Path::new(id).join(".git").exists()) {
+        return Err(format!(
+            "{plain} is not a git repository, so it cannot be pulled"
+        ));
+    }
+    RepoHub::global(cx)
+        .update(cx, |hub, cx| {
+            ids.iter()
+                .try_for_each(|id| hub.set_pull_every(id, every, cx))
+        })
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(vec![Frame::Message(match every {
+        Some(every) => format!(
+            "pulling {} every {every} while dowse runs",
+            repos.join(", ")
+        ),
+        None => format!("no longer pulling {}", repos.join(", ")),
+    })])
+}
+
+/// The tasks, now or once every one has finished.
+fn tasks(wait: bool, reply: Sender<Frame>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        while wait && cx.update(|cx| TaskHub::keeps_app_running(cx)) {
+            cx.background_executor().timer(WAIT_STEP * 8).await;
+            if reply.is_closed() {
+                return;
+            }
+        }
+        let infos = cx.update(|cx| TaskHub::global(cx).read(cx).infos());
+        reply.send(Frame::Tasks(infos)).await.ok();
+        reply.send(Frame::Done).await.ok();
+    })
+    .detach();
+}
+
+fn cancel_tasks(ids: &[u64], all: bool, cx: &mut App) -> Frame {
+    let tasks = TaskHub::global(cx);
+    let count = tasks.update(cx, |tasks, cx| {
+        if all {
+            tasks.cancel_all(cx)
+        } else {
+            ids.iter().filter(|id| tasks.cancel_one(**id, cx)).count()
+        }
+    });
+    Frame::Message(format!(
+        "cancelled {}",
+        crate::format::plural(count, "task", "tasks")
+    ))
 }
 
 // ----- the app ------------------------------------------------------------------

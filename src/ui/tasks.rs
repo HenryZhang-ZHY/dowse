@@ -138,8 +138,8 @@ impl TaskHub {
             if self.is_cloning(&job.full_name) {
                 continue;
             }
-            let title = job.full_name.clone();
-            ids.push(self.push(TaskKind::Clone, title, Job::Clone(job)));
+            let name = job.full_name.clone();
+            ids.push(self.push(TaskKind::Clone, name.clone(), name, Job::Clone(job)));
         }
         self.start_ready(cx);
         ids
@@ -150,23 +150,35 @@ impl TaskHub {
         let mut tasks = Vec::new();
         for id in ids {
             if !self.is_pulling(id) {
-                tasks.push(self.push(TaskKind::Pull, id.clone(), Job::Pull { id: id.clone() }));
+                let name = RepoHub::global(cx)
+                    .read(cx)
+                    .library_name(id)
+                    .unwrap_or_else(|| id.clone());
+                let job = Job::Pull { id: id.clone() };
+                tasks.push(self.push(TaskKind::Pull, id.clone(), name, job));
             }
         }
         self.start_ready(cx);
         tasks
     }
 
-    fn push(&mut self, kind: TaskKind, title: String, job: Job) -> u64 {
-        let id = self.list.push(kind, title, job.clone());
+    fn push(&mut self, kind: TaskKind, key: String, title: String, job: Job) -> u64 {
+        let id = self.list.push(kind, key, title, job.clone());
         self.jobs.insert(id, job);
         id
     }
 
     pub(super) fn cancel(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.list.cancel(id) {
+        self.cancel_one(id, cx);
+    }
+
+    /// Cancel a task. Returns `false` when it had already finished.
+    pub(super) fn cancel_one(&mut self, id: u64, cx: &mut Context<Self>) -> bool {
+        let cancelled = self.list.cancel(id);
+        if cancelled {
             cx.notify();
         }
+        cancelled
     }
 
     pub(super) fn cancel_all(&mut self, cx: &mut Context<Self>) -> usize {
@@ -183,10 +195,10 @@ impl TaskHub {
         let Some(job) = self.jobs.get(&id).cloned() else {
             return;
         };
-        if !info.state.is_finished() || self.list.any_active(info.kind, &info.title) {
+        if !info.state.is_finished() || self.list.any_active(info.kind, &info.key) {
             return;
         }
-        self.push(info.kind, info.title, job);
+        self.push(info.kind, info.key, info.title, job);
         self.start_ready(cx);
     }
 

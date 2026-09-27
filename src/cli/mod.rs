@@ -15,9 +15,12 @@ use std::io::{self, IsTerminal as _, Write as _};
 
 use clap::Parser as _;
 
+use crate::engine::github::{RemoteFilter, RemoteRepo};
 use crate::engine::query::SearchQuery;
 use crate::ipc::protocol::{Frame, LogsRequest, Request, SearchRequest};
-use args::{Cli, CliCommand, DevAction, ReposAction, SearchArgs};
+use args::{
+    Cli, CliCommand, CloneArgs, DevAction, GithubArgs, ReposAction, SearchArgs, TasksAction,
+};
 use output::Style;
 
 /// The guide `dowse guide` prints.
@@ -142,6 +145,28 @@ fn execute(command: CliCommand) -> io::Result<i32> {
                 add: tags,
                 remove,
             },
+            Some(ReposAction::Github(github)) => return run_github(github),
+            Some(ReposAction::Clone(clone)) => {
+                let wait = clone.wait;
+                let request = clone_request(clone)?;
+                return print_frames(send(request)?, false)
+                    .map(|status| if wait { status } else { status.min(FOUND) });
+            }
+            Some(ReposAction::Pull { repos, scope, wait }) => Request::Pull {
+                repos,
+                scope: scope.into(),
+                wait,
+            },
+            Some(ReposAction::Sync { repos, every, off }) => Request::SetPullEvery {
+                repos,
+                every: if off { None } else { every },
+            },
+        },
+        CliCommand::Tasks(tasks) => match tasks.action {
+            None => {
+                return print_frames(send(Request::Tasks { wait: tasks.wait })?, tasks.json);
+            }
+            Some(TasksAction::Cancel { ids, all }) => Request::CancelTasks { ids, all },
         },
         CliCommand::Index(index) => Request::Index {
             scope: index.scope.into(),
@@ -219,10 +244,127 @@ fn print_frames(frames: crate::ipc::Frames, json: bool) -> io::Result<i32> {
                 stdout.write_all(output::log_line(&entry, style).as_bytes())?;
                 stdout.flush()?;
             }
+            Frame::Tasks(tasks) if json => {
+                for task in &tasks {
+                    writeln!(stdout, "{}", to_json(task))?;
+                }
+            }
+            Frame::Tasks(tasks) => {
+                let now = crate::diagnostics::log::now_ms();
+                stdout.write_all(output::tasks_text(&tasks, now).as_bytes())?;
+                if tasks.is_empty() {
+                    eprintln!("no tasks");
+                }
+            }
             Frame::Search(_) => {}
         }
     }
     Ok(FAILED)
+}
+
+/// List an owner's GitHub repositories. This runs `gh` here, without the
+/// app.
+fn run_github(args: GithubArgs) -> io::Result<i32> {
+    let repos = list_github(
+        args.owner.as_deref(),
+        args.limit,
+        &RemoteFilter {
+            text: args.filter.unwrap_or_default(),
+            forks: args.forks,
+            archived: args.archived,
+        },
+    )?;
+    let mut stdout = io::stdout().lock();
+    if args.json {
+        for repo in &repos {
+            writeln!(stdout, "{}", to_json(repo))?;
+        }
+    } else if args.quiet {
+        for repo in &repos {
+            writeln!(stdout, "{}", repo.full_name)?;
+        }
+    } else {
+        let now = crate::diagnostics::log::now_ms();
+        stdout.write_all(output::github_text(&repos, now).as_bytes())?;
+    }
+    eprintln!(
+        "{} {}",
+        output::number(repos.len()),
+        if repos.len() == 1 {
+            "repository"
+        } else {
+            "repositories"
+        }
+    );
+    Ok(if repos.is_empty() { NOT_FOUND } else { FOUND })
+}
+
+fn list_github(
+    owner: Option<&str>,
+    limit: usize,
+    filter: &RemoteFilter,
+) -> io::Result<Vec<RemoteRepo>> {
+    let repos = crate::engine::github::list(owner, limit)
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+    Ok(repos
+        .into_iter()
+        .filter(|repo| filter.matches(repo))
+        .collect())
+}
+
+/// What `dowse repos clone` asks of the app. With `--from`, the owner's
+/// repositories are listed here and the words filter their names.
+fn clone_request(clone: CloneArgs) -> io::Result<Request> {
+    let cwd = current_dir();
+    let repos = match &clone.from {
+        None => {
+            if let Some(bad) = clone.repos.iter().find(|repo| {
+                let mut parts = repo.split('/');
+                !matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(name), None) if !owner.is_empty() && !name.is_empty())
+            }) {
+                return Err(io::Error::other(format!(
+                    "{bad} is not a repository as owner/name; use --from <owner> for an owner's repositories"
+                )));
+            }
+            clone.repos.clone()
+        }
+        Some(owner) => {
+            let filter = RemoteFilter {
+                text: String::new(),
+                forks: clone.forks,
+                archived: clone.archived,
+            };
+            let listed = list_github(
+                Some(owner),
+                crate::engine::github::DEFAULT_LIST_LIMIT,
+                &filter,
+            )?;
+            let words: Vec<String> = clone.repos.iter().map(|word| word.to_lowercase()).collect();
+            let names: Vec<String> = listed
+                .into_iter()
+                .filter(|repo| {
+                    words
+                        .iter()
+                        .all(|word| repo.name.to_lowercase().contains(word))
+                })
+                .map(|repo| repo.full_name)
+                .collect();
+            if names.is_empty() {
+                return Err(io::Error::other(format!(
+                    "{owner} has no repositories to clone that match"
+                )));
+            }
+            names
+        }
+    };
+    Ok(Request::Clone {
+        repos,
+        root: clone.into.map(|root| cwd.join(root)),
+        mode: clone.mode,
+        tags: clone.tags,
+        pull_every: clone.pull_every,
+        wait: clone.wait,
+    })
 }
 
 fn to_json(value: &impl serde::Serialize) -> String {

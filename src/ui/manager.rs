@@ -20,7 +20,7 @@ use dowse::engine::github::{self, CloneMode, RemoteFilter, RemoteRepo};
 use dowse::engine::repo;
 use dowse::engine::session::CloneDefaults;
 use dowse::engine::sync::Interval;
-use dowse::engine::tasks::{TaskInfo, TaskKind, TaskState};
+use dowse::engine::tasks::{TaskKind, TaskState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Section {
@@ -576,7 +576,7 @@ impl SearchApp {
                 TaskState::Failed { error } => RemoteStatus::Failed(error.clone()),
                 TaskState::Cancelled => continue,
             };
-            statuses.insert(info.title.clone(), status);
+            statuses.insert(info.key.clone(), status);
         }
         statuses
     }
@@ -693,19 +693,5 @@ impl SearchApp {
             window.push_notification(message, cx);
         }
         cx.notify();
-    }
-
-    // ----- tasks ------------------------------------------------------------------------
-
-    /// How a task's title reads: a pull's repository by name.
-    pub(super) fn task_title(&self, info: &TaskInfo, cx: &App) -> String {
-        match info.kind {
-            TaskKind::Clone => info.title.clone(),
-            TaskKind::Pull => self
-                .hub
-                .read(cx)
-                .library_name(&info.title)
-                .unwrap_or_else(|| info.title.clone()),
-        }
     }
 }

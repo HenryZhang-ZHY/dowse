@@ -1512,7 +1512,7 @@ impl SearchApp {
             TaskKind::Pull => "Pulling",
         };
         let text = match running.as_slice() {
-            [one] => format!("{} {}", verb(one.kind), self.task_title(one, cx)),
+            [one] => format!("{} {}", verb(one.kind), one.title),
             many => format!("{} tasks running", many.len()),
         };
         let text = if queued > 0 {

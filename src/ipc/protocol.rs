@@ -15,17 +15,20 @@ use crate::diagnostics::log::{LogEntry, LogLevel};
 use crate::diagnostics::metrics::MetricsSnapshot;
 use crate::engine::config::ConfigDir;
 use crate::engine::facets::{FacetFilter, FacetKind, Facets, ROOT_DIRECTORY};
+use crate::engine::github::CloneMode;
 use crate::engine::library::Library;
 use crate::engine::query::SearchQuery;
 use crate::engine::repo::{self, RepoInfo, Scope};
 use crate::engine::search::{FileMatch, SearchOutcome};
+use crate::engine::sync::Interval;
 use crate::engine::table::ExportFormat;
+use crate::engine::tasks::TaskInfo;
 use crate::engine::workspace;
 use crate::launch::Command;
 
 /// Bumped whenever a message changes shape, so a command line and an app
 /// from different builds notice instead of misreading each other.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Facet values sent per facet: enough to suggest how to narrow a query.
 const FACET_VALUES: usize = 8;
@@ -68,6 +71,38 @@ pub enum Request {
         wait: bool,
         #[serde(default)]
         full: bool,
+    },
+    /// Clone GitHub repositories (`owner/name`) into `<root>/<owner>/<name>`
+    /// in the background, adding them to the library. Without `root`, the
+    /// folder the last clone used.
+    Clone {
+        repos: Vec<String>,
+        root: Option<PathBuf>,
+        mode: CloneMode,
+        tags: Vec<String>,
+        pull_every: Option<Interval>,
+        wait: bool,
+    },
+    /// Pull repositories, by name or path, or those in scope when none are
+    /// named.
+    Pull {
+        repos: Vec<String>,
+        scope: ScopeSpec,
+        wait: bool,
+    },
+    /// Pull repositories on an interval, or stop with `None`.
+    SetPullEvery {
+        repos: Vec<String>,
+        every: Option<Interval>,
+    },
+    /// The background tasks; with `wait`, once every one has finished.
+    Tasks {
+        wait: bool,
+    },
+    /// Cancel tasks by id, or every one with `all`.
+    CancelTasks {
+        ids: Vec<u64>,
+        all: bool,
     },
     Status,
     Logs(LogsRequest),
@@ -125,6 +160,7 @@ pub enum Frame {
     Status(AppStatus),
     Log(LogEntry),
     Metrics(Box<MetricsSnapshot>),
+    Tasks(Vec<TaskInfo>),
     /// Something done, for a person to read.
     Message(String),
     Done,
@@ -352,6 +388,9 @@ pub struct RepoStatus {
     /// Files changed since the index was built, which searches read
     /// directly.
     pub changed_files: usize,
+    /// How often dowse pulls it, when it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_every: Option<Interval>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

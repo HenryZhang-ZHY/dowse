@@ -1259,7 +1259,7 @@ impl SearchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let id = info.id;
-        let title = self.task_title(info, cx);
+        let title = info.title.clone();
         let (icon, kind) = match info.kind {
             TaskKind::Clone => (Lucide::Download, "Clone"),
             TaskKind::Pull => (Lucide::CloudDownload, "Pull"),
@@ -1287,7 +1287,7 @@ impl SearchApp {
             (TaskKind::Clone, TaskState::Done { message }) => {
                 message.strip_prefix("cloned into ").map(PathBuf::from)
             }
-            (TaskKind::Pull, _) => Some(PathBuf::from(&info.title)),
+            (TaskKind::Pull, _) => Some(PathBuf::from(&info.key)),
             _ => None,
         };
 

@@ -9,6 +9,8 @@ use serde::Serialize;
 
 use crate::diagnostics::log::{LogEntry, format_time};
 use crate::diagnostics::metrics::{MetricsSnapshot, TimingSummary};
+use crate::engine::github::RemoteRepo;
+use crate::engine::tasks::{TaskInfo, TaskKind, TaskState};
 use crate::ipc::protocol::{AppStatus, FacetCounts, FileHit, RepoStatus, SearchResponse};
 
 /// Whether to colour text for a terminal.
@@ -277,7 +279,7 @@ pub fn qualifier(name: &str, value: &str) -> String {
 /// One repository per line: name, branch, index state, files, when indexed,
 /// tags and path.
 pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
-    let rows: Vec<[String; 6]> = repos
+    let rows: Vec<[String; 7]> = repos
         .iter()
         .map(|repo| {
             let mut index = repo.index.clone();
@@ -295,6 +297,8 @@ pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
                     .map_or_else(|| "-".into(), |files| number(files as usize)),
                 repo.indexed_at_ms
                     .map_or_else(|| "-".into(), |at| ago(now_ms.saturating_sub(at))),
+                repo.pull_every
+                    .map_or_else(|| "-".into(), |every| every.to_string()),
                 if repo.tags.is_empty() {
                     "-".into()
                 } else {
@@ -303,7 +307,10 @@ pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
             ]
         })
         .collect();
-    let header = ["NAME", "BRANCH", "INDEX", "FILES", "INDEXED", "TAGS"].map(String::from);
+    let header = [
+        "NAME", "BRANCH", "INDEX", "FILES", "INDEXED", "PULL", "TAGS",
+    ]
+    .map(String::from);
     let mut widths = header.clone().map(|cell| cell.chars().count());
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
@@ -323,6 +330,119 @@ pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
             }
             None => out.push_str("PATH\n"),
         }
+    }
+    out
+}
+
+/// Background tasks: one line each, oldest first.
+pub fn tasks_text(tasks: &[TaskInfo], now_ms: u64) -> String {
+    if tasks.is_empty() {
+        return String::new();
+    }
+    let rows: Vec<Vec<String>> = tasks
+        .iter()
+        .map(|task| {
+            let (state, detail) = match &task.state {
+                TaskState::Queued => ("queued".to_string(), String::new()),
+                TaskState::Running => (
+                    task.fraction
+                        .map(|fraction| format!("{:.0}%", fraction * 100.0))
+                        .unwrap_or_else(|| "running".into()),
+                    task.detail.clone(),
+                ),
+                TaskState::Done { message } => ("done".to_string(), message.clone()),
+                TaskState::Failed { error } => ("failed".to_string(), error.clone()),
+                TaskState::Cancelled => ("cancelled".to_string(), String::new()),
+            };
+            let at = task.finished_at.unwrap_or(task.queued_at) * 1000;
+            vec![
+                task.id.to_string(),
+                match task.kind {
+                    TaskKind::Clone => "clone".into(),
+                    TaskKind::Pull => "pull".into(),
+                },
+                state,
+                ago(now_ms.saturating_sub(at)),
+                task.title.clone(),
+                detail,
+            ]
+        })
+        .collect();
+    columns(&["ID", "KIND", "STATE", "WHEN", "TASK", "DETAIL"], &rows)
+}
+
+/// An owner's GitHub repositories.
+pub fn github_text(repos: &[RemoteRepo], now_ms: u64) -> String {
+    let rows: Vec<Vec<String>> = repos
+        .iter()
+        .map(|repo| {
+            let mut flags = Vec::new();
+            if repo.private {
+                flags.push("private");
+            }
+            if repo.fork {
+                flags.push("fork");
+            }
+            if repo.archived {
+                flags.push("archived");
+            }
+            let pushed = repo
+                .pushed_at
+                .as_deref()
+                .and_then(crate::engine::github::parse_timestamp)
+                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|since| ago(now_ms.saturating_sub(since.as_millis() as u64)))
+                .unwrap_or_else(|| "-".into());
+            vec![
+                repo.full_name.clone(),
+                repo.language.clone().unwrap_or_else(|| "-".into()),
+                bytes(repo.size_kb * 1024),
+                pushed,
+                if flags.is_empty() {
+                    "-".into()
+                } else {
+                    flags.join(",")
+                },
+                repo.description.clone(),
+            ]
+        })
+        .collect();
+    columns(
+        &[
+            "REPOSITORY",
+            "LANGUAGE",
+            "SIZE",
+            "PUSHED",
+            "FLAGS",
+            "DESCRIPTION",
+        ],
+        &rows,
+    )
+}
+
+/// Rows under a header, each column as wide as its widest cell; the last
+/// column is not padded.
+fn columns(header: &[&str], rows: &[Vec<String>]) -> String {
+    let mut widths: Vec<usize> = header.iter().map(|cell| cell.chars().count()).collect();
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let header: Vec<String> = header.iter().map(|cell| cell.to_string()).collect();
+    let mut out = String::new();
+    for row in std::iter::once(&header).chain(rows) {
+        let last = row.len().saturating_sub(1);
+        let mut line = String::new();
+        for (index, (cell, width)) in row.iter().zip(&widths).enumerate() {
+            if index == last {
+                line.push_str(cell);
+            } else {
+                let _ = write!(line, "{cell:width$}  ");
+            }
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
     }
     out
 }
@@ -505,6 +625,69 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn tasks_and_github_repositories_print_as_columns() {
+        let task = |id, kind, state| TaskInfo {
+            id,
+            kind,
+            key: "alice/api".into(),
+            title: "alice/api".into(),
+            state,
+            fraction: Some(0.5),
+            detail: "Receiving objects".into(),
+            queued_at: 100,
+            finished_at: None,
+        };
+        let text = tasks_text(
+            &[
+                task(1, TaskKind::Clone, TaskState::Running),
+                task(
+                    12,
+                    TaskKind::Pull,
+                    TaskState::Failed {
+                        error: "offline".into(),
+                    },
+                ),
+            ],
+            160_000,
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("ID  KIND   STATE   WHEN"), "{text}");
+        assert!(
+            lines[1].contains("clone  50%") && lines[1].ends_with("Receiving objects"),
+            "{text}"
+        );
+        assert!(
+            lines[2].contains("pull   failed") && lines[2].ends_with("offline"),
+            "{text}"
+        );
+        assert_eq!(tasks_text(&[], 0), "");
+
+        let repo = RemoteRepo {
+            full_name: "alice/api".into(),
+            name: "api".into(),
+            owner: "alice".into(),
+            description: "The API".into(),
+            private: true,
+            fork: true,
+            archived: false,
+            language: Some("Rust".into()),
+            size_kb: 2048,
+            pushed_at: None,
+            default_branch: Some("main".into()),
+            url: String::new(),
+        };
+        let text = github_text(&[repo], 0);
+        assert!(
+            text.lines()
+                .nth(1)
+                .unwrap()
+                .starts_with("alice/api   Rust      2.0 MB  -       private,fork  The API"),
+            "{text}"
+        );
+    }
     use crate::engine::query::{CompiledQuery, SearchQuery};
     use crate::engine::repo::RepoInfo;
     use crate::ipc::protocol::{LineHit, SearchSummary};
@@ -781,13 +964,15 @@ mod tests {
             files: Some(12_000),
             indexed_at_ms: Some(1_000),
             changed_files: 3,
+            pull_every: "1h".parse().ok(),
         }];
         let text = repos_text(&repos, 121_000);
         let lines: Vec<&str> = text.lines().collect();
         assert!(lines[0].starts_with("NAME  BRANCH  INDEX"), "{}", lines[0]);
         assert!(
-            lines[1]
-                .starts_with("api   main    ready +3 changed  12,000  2m ago   dev owner:alice  "),
+            lines[1].starts_with(
+                "api   main    ready +3 changed  12,000  2m ago   1h    dev owner:alice  "
+            ),
             "{}",
             lines[1]
         );

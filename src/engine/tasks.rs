@@ -51,7 +51,10 @@ impl TaskState {
 pub struct TaskInfo {
     pub id: u64,
     pub kind: TaskKind,
-    /// What it works on, such as `alice/api`.
+    /// What it works on, which no two unfinished tasks of a kind share:
+    /// `alice/api` for a clone, the folder for a pull.
+    pub key: String,
+    /// What it works on, for people: `alice/api`, or the repository's name.
     pub title: String,
     #[serde(flatten)]
     pub state: TaskState,
@@ -111,14 +114,21 @@ impl<J> TaskList<J> {
         self.limits.insert(kind, limit.max(1));
     }
 
-    /// Queue `job`. Returns its id.
-    pub fn push(&mut self, kind: TaskKind, title: impl Into<String>, job: J) -> u64 {
+    /// Queue `job`, working on `key` (see [`TaskInfo::key`]). Returns its id.
+    pub fn push(
+        &mut self,
+        kind: TaskKind,
+        key: impl Into<String>,
+        title: impl Into<String>,
+        job: J,
+    ) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.entries.push(Entry {
             info: TaskInfo {
                 id,
                 kind,
+                key: key.into(),
                 title: title.into(),
                 state: TaskState::Queued,
                 fraction: None,
@@ -259,10 +269,10 @@ impl<J> TaskList<J> {
             .count()
     }
 
-    /// Whether a queued task's job, or a running task's title, matches.
-    pub fn any_active(&self, kind: TaskKind, title: &str) -> bool {
+    /// Whether a task of `kind` working on `key` is queued or running.
+    pub fn any_active(&self, kind: TaskKind, key: &str) -> bool {
         self.entries.iter().any(|entry| {
-            entry.info.kind == kind && entry.info.title == title && !entry.info.state.is_finished()
+            entry.info.kind == kind && entry.info.key == key && !entry.info.state.is_finished()
         })
     }
 
@@ -327,9 +337,9 @@ mod tests {
         let mut list = TaskList::default();
         list.set_limit(TaskKind::Clone, 2);
         for name in ["a", "b", "c"] {
-            list.push(TaskKind::Clone, name, name);
+            list.push(TaskKind::Clone, name, name, name);
         }
-        let pull = list.push(TaskKind::Pull, "p", "p");
+        let pull = list.push(TaskKind::Pull, "/src/p", "p", "p");
         let started: Vec<&str> = list.start_ready().into_iter().map(|s| s.job).collect();
         assert_eq!(started, ["a", "b", "p"]);
         assert!(list.start_ready().is_empty(), "limits are full");
@@ -338,9 +348,11 @@ mod tests {
         let started: Vec<&str> = list.start_ready().into_iter().map(|s| s.job).collect();
         assert_eq!(started, ["c"]);
         assert_eq!(list.active_count(), 3);
-        assert!(list.any_active(TaskKind::Pull, "p"));
+        assert!(list.any_active(TaskKind::Pull, "/src/p"));
+        assert!(!list.any_active(TaskKind::Pull, "p"), "by key, not title");
+        assert!(!list.any_active(TaskKind::Clone, "/src/p"));
         list.finish(pull, Err("offline".into()));
-        assert!(!list.any_active(TaskKind::Pull, "p"));
+        assert!(!list.any_active(TaskKind::Pull, "/src/p"));
         assert_eq!(
             list.info(pull).unwrap().state,
             TaskState::Failed {
@@ -354,8 +366,8 @@ mod tests {
     fn cancelling_drops_queued_tasks_and_flags_running_ones() {
         let mut list = TaskList::default();
         list.set_limit(TaskKind::Clone, 1);
-        let running = list.push(TaskKind::Clone, "a", "a");
-        let queued = list.push(TaskKind::Clone, "b", "b");
+        let running = list.push(TaskKind::Clone, "a", "a", "a");
+        let queued = list.push(TaskKind::Clone, "b", "b", "b");
         let started = list.start_ready();
         assert!(list.cancel(queued));
         assert!(list.cancel(running));
@@ -383,7 +395,7 @@ mod tests {
     #[test]
     fn progress_applies_to_running_tasks_only() {
         let mut list = TaskList::default();
-        let id = list.push(TaskKind::Pull, "a", "a");
+        let id = list.push(TaskKind::Pull, "a", "a", "a");
         list.progress(id, Some(0.5), "early");
         assert_eq!(list.info(id).unwrap().fraction, None);
         list.start_ready();
@@ -402,7 +414,7 @@ mod tests {
         let mut list = TaskList::default();
         list.set_limit(TaskKind::Pull, 1000);
         for n in 0..KEEP_FINISHED + 5 {
-            list.push(TaskKind::Pull, n.to_string(), "job");
+            list.push(TaskKind::Pull, n.to_string(), n.to_string(), "job");
         }
         for started in list.start_ready() {
             list.finish(started.id, Ok(String::new()));
@@ -415,7 +427,7 @@ mod tests {
     #[test]
     fn task_infos_serialize_flat() {
         let mut list = TaskList::default();
-        let id = list.push(TaskKind::Clone, "alice/api", ());
+        let id = list.push(TaskKind::Clone, "alice/api", "alice/api", ());
         list.start_ready();
         list.finish(id, Err("boom".into()));
         let json = serde_json::to_value(list.info(id).unwrap()).unwrap();
