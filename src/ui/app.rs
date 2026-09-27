@@ -60,6 +60,9 @@ pub struct SearchApp {
     pub(super) active_tab: usize,
     pub(super) next_tab_id: usize,
     pub(super) highlighters: Highlighters,
+    /// The path filter box is shown, though the search box's `path:` does
+    /// the same. It shows anyway while a tab has a path filter.
+    pub(super) path_filter_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -119,6 +122,7 @@ impl SearchApp {
             active_tab: 0,
             next_tab_id: 0,
             highlighters: Highlighters::default(),
+            path_filter_open: false,
             _subscriptions: subscriptions,
         };
         let mut queries = tabs.queries;
@@ -459,10 +463,35 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) {
         self.page = Page::Search;
+        self.path_filter_open = true;
         self.tab()
             .path_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
+    }
+
+    /// Whether the path filter box is shown.
+    pub(super) fn path_filter_shown(&self, cx: &App) -> bool {
+        self.path_filter_open || !self.tab().path_input.read(cx).value().trim().is_empty()
+    }
+
+    /// Show the path filter box and focus it, or hide it and drop the
+    /// current tab's path filter.
+    pub(super) fn toggle_path_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.path_filter_shown(cx) {
+            self.path_filter_open = false;
+            let input = self.tab().path_input.clone();
+            if !input.read(cx).value().is_empty() {
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+                self.run_search(false, cx);
+            }
+            self.tab()
+                .search_input
+                .update(cx, |input, cx| input.focus(window, cx));
+            cx.notify();
+        } else {
+            self.on_focus_path_filter(&FocusPathFilter, window, cx);
+        }
     }
 
     pub(super) fn on_toggle_case_sensitive(

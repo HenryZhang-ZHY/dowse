@@ -116,6 +116,7 @@ impl SearchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let searchable = !self.members.is_empty();
+        let path_filter_shown = self.path_filter_shown(cx);
 
         let toggles = h_flex()
             .gap_0p5()
@@ -149,6 +150,15 @@ impl SearchApp {
                     self.tab().regex,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.set_regex(!this.tab().regex, cx))),
+            )
+            .child(
+                option_toggle(
+                    "path-filter",
+                    Lucide::Funnel,
+                    "Filter paths (Ctrl+P); path: in the query does the same",
+                    path_filter_shown,
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_path_filter(window, cx))),
             );
 
         let on_repositories = self.page == Page::Repositories;
@@ -204,14 +214,16 @@ impl SearchApp {
                         .disabled(!searchable),
                 ),
             )
-            .child(
-                div().w(px(300.)).flex_none().child(
-                    Input::new(&self.tab().path_input)
-                        .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
-                        .cleanable(true)
-                        .disabled(!searchable),
-                ),
-            )
+            .when(path_filter_shown, |header| {
+                header.child(
+                    div().w(px(280.)).flex_none().child(
+                        Input::new(&self.tab().path_input)
+                            .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
+                            .cleanable(true)
+                            .disabled(!searchable),
+                    ),
+                )
+            })
             .child(
                 h_flex()
                     .flex_none()
@@ -1289,8 +1301,11 @@ impl SearchApp {
                     ))
                     .child(tip("Alt+C  Alt+W", "Match case, whole word"))
                     .child(tip("Alt+R  .*", "Whole query as one regular expression"))
-                    .child(tip("src  *.rs", "Path filter keeps matching paths"))
-                    .child(tip("!tests  -*.md", "Path filter drops matching paths"))
+                    .child(tip(
+                        "path:src/*.rs",
+                        "Only matching paths; -path: drops them",
+                    ))
+                    .child(tip("Ctrl+P", "A path filter box: src  *.rs  !tests"))
                     .child(tip("Narrow by tag", "Pick which repositories to search"))
                     .child(tip("Ctrl+T  Ctrl+Tab", "New search tab, next tab"))
                     .child(tip("Click a line", "Preview the file there"))

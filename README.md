@@ -88,8 +88,10 @@ still open, and each repository keeps its `.tgrep` index.
   set match case (`Alt+C`) and whole word (`Alt+W`) for every term; regular
   expression (`Alt+R`) takes the whole box as one regex, matched line by line. On
   macOS the shortcuts are `Cmd+Alt+C/W/R`.
-- **Path filter**: space-separated terms. `src` keeps paths containing `src`, `*.rs`
-  keeps matching globs, and `!tests` or `-*.md` drops paths.
+- **Path filter**: `path:` in the query is usually enough; for more, the funnel in
+  the search box (`Ctrl+P`) opens a box of space-separated terms beside it. `src`
+  keeps paths containing `src`, `*.rs` keeps matching globs, and `!tests` or `-*.md`
+  drops paths. The box stays open while a tab has a filter in it.
 - **Results as snippets**, coloured by language with tree-sitter grammars: every match
   is highlighted, with one line of context. Long files collapse to their first
   matches ("Show N more matches").
@@ -156,7 +158,7 @@ still open, and each repository keeps its `.tgrep` index.
   filter, then closes.
 - Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
   page (the palette also has Clone from GitHub, Pull Repositories in Scope and Show
-  Background Tasks), `Ctrl+F` focuses the search box, `Ctrl+P` the path filter, and
+  Background Tasks), `Ctrl+F` focuses the search box, `Ctrl+P` opens the path filter, and
   `Ctrl+Shift+R` updates the indexes in scope (the palette also rebuilds them from
   scratch). `Ctrl+Shift+N` opens a new window,
   `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one. `Ctrl+Shift+I` or
