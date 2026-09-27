@@ -142,6 +142,30 @@ fn explain_gh(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// A GitHub timestamp, `2026-09-26T11:57:50Z`, as a time.
+pub fn parse_timestamp(text: &str) -> Option<std::time::SystemTime> {
+    let (date, time) = text.trim().trim_end_matches('Z').split_once('T')?;
+    let mut date = date.split('-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (date.next()??, date.next()??, date.next()??);
+    let mut time = time.split(':').map(|part| part.parse::<f64>().ok());
+    let (hour, minute, second) = (time.next()??, time.next()??, time.next()??);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil calendar date (Howard Hinnant's algorithm).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let seconds = days * 86_400 + (hour * 3600.0 + minute * 60.0 + second) as i64;
+    u64::try_from(seconds)
+        .ok()
+        .map(|seconds| std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+}
+
 // ----- choosing ------------------------------------------------------------------
 
 /// What the clone list shows.
@@ -382,6 +406,22 @@ mod tests {
         assert_eq!(repos[1].language, None);
         assert_eq!(repos[1].default_branch, None);
         assert!(parse_list("not json").is_err());
+    }
+
+    #[test]
+    fn parses_github_timestamps() {
+        let at = |secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        assert_eq!(parse_timestamp("1970-01-01T00:00:00Z"), Some(at(0)));
+        assert_eq!(
+            parse_timestamp("2026-09-26T11:57:50Z"),
+            Some(at(1_790_423_870))
+        );
+        assert_eq!(
+            parse_timestamp("2000-02-29T00:00:01Z"),
+            Some(at(951_782_401))
+        );
+        assert_eq!(parse_timestamp("yesterday"), None);
+        assert_eq!(parse_timestamp("2026-13-01T00:00:00Z"), None);
     }
 
     #[test]

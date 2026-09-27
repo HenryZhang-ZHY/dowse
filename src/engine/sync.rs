@@ -26,7 +26,7 @@ impl Interval {
     /// Pulling more often than this only loads the remote.
     pub const MIN: Duration = Duration::from_secs(5 * 60);
     /// The choices the repositories page offers.
-    pub const PRESETS: [&'static str; 6] = ["15m", "30m", "1h", "6h", "1d", "7d"];
+    pub const PRESETS: [&'static str; 7] = ["15m", "30m", "1h", "6h", "1d", "3d", "7d"];
 
     pub fn duration(self) -> Duration {
         self.0

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::github::CloneMode;
 use super::query::SearchQuery;
 use super::store;
 
@@ -25,6 +26,22 @@ pub struct Session {
     /// The scope last used with each saved workspace.
     #[serde(default)]
     pub scopes: BTreeMap<PathBuf, Vec<String>>,
+    /// What the last clone from GitHub used, to start the next one from.
+    #[serde(default)]
+    pub clone: CloneDefaults,
+}
+
+/// The choices of the last clone from GitHub.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloneDefaults {
+    /// The folder clones go under, as `<root>/<owner>/<name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    #[serde(default)]
+    pub mode: CloneMode,
+    /// The owner last listed; `None` for the signed-in user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 /// One window: a saved workspace, or the repositories of an untitled one.
@@ -114,6 +131,11 @@ mod tests {
         session
             .scopes
             .insert("/w/team.dowse-workspace".into(), vec!["dev".into()]);
+        session.clone = CloneDefaults {
+            root: Some("/src/mirrors".into()),
+            mode: CloneMode::Shallow,
+            owner: Some("microsoft".into()),
+        };
         session.save(&file).unwrap();
         assert_eq!(Session::load(&file).unwrap(), session);
     }
