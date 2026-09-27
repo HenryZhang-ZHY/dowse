@@ -4,11 +4,12 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Once;
 use std::time::Duration;
 
-use gpui_kit::HighlightStyle;
 use gpui_kit::component::Rope;
-use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+use gpui_kit::component::highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter};
+use gpui_kit::{HighlightStyle, SharedString};
 
 /// Styled byte ranges of one line, relative to the line.
 pub(super) type LineStyles = Vec<(Range<usize>, HighlightStyle)>;
@@ -56,6 +57,38 @@ pub(super) fn grammar(language: &str) -> Option<&'static str> {
     })
 }
 
+/// Highlights queries for grammars GPUI Kit registers with an empty one, so
+/// they parse but colour nothing. GraphQL's and Proto's crates export none.
+const MISSING_QUERIES: [(&str, &str); 5] = [
+    ("csharp", tree_sitter_c_sharp::HIGHLIGHTS_QUERY),
+    ("swift", tree_sitter_swift::HIGHLIGHTS_QUERY),
+    ("cmake", tree_sitter_cmake::HIGHLIGHTS_QUERY),
+    ("graphql", include_str!("queries/graphql.scm")),
+    ("proto", include_str!("queries/proto.scm")),
+];
+
+/// Fill in [`MISSING_QUERIES`] where the registry's query is still empty.
+/// Runs once, before the first highlighter is built.
+fn register_missing_queries() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let registry = LanguageRegistry::singleton();
+        for (grammar, highlights) in MISSING_QUERIES {
+            if let Some(mut config) = registry.language(grammar)
+                && config.highlights.is_empty()
+            {
+                config.highlights = SharedString::from(highlights);
+                registry.register(grammar, &config);
+            }
+        }
+    });
+}
+
+fn new_highlighter(grammar: &str) -> SyntaxHighlighter {
+    register_missing_queries();
+    SyntaxHighlighter::new(grammar)
+}
+
 /// Highlighters by grammar, kept because building one compiles the
 /// grammar's queries.
 #[derive(Default)]
@@ -72,7 +105,7 @@ impl Highlighters {
         let highlighter = self
             .0
             .entry(grammar)
-            .or_insert_with(|| SyntaxHighlighter::new(grammar));
+            .or_insert_with(|| new_highlighter(grammar));
         highlight_lines(highlighter, lines, theme)
     }
 }
@@ -84,7 +117,7 @@ pub(super) fn highlight_once(
     lines: &[&str],
     theme: &HighlightTheme,
 ) -> Vec<LineStyles> {
-    highlight_lines(&mut SyntaxHighlighter::new(grammar), lines, theme)
+    highlight_lines(&mut new_highlighter(grammar), lines, theme)
 }
 
 fn highlight_lines(
@@ -167,6 +200,28 @@ mod tests {
         assert_eq!(styles.len(), 3);
         assert!(styles[0].iter().any(|(range, _)| *range == (0..2)));
         assert!(styles[1].iter().any(|(range, _)| *range == (4..7)));
+    }
+
+    #[test]
+    fn highlights_grammars_with_a_filled_in_query() {
+        // A query that fails to compile only logs a warning and colours
+        // nothing, so check a keyword is styled for each.
+        let cases: [(&str, &[&str], usize, Range<usize>); 5] = [
+            ("csharp", &["class A {", "    public int X;", "}"], 1, 4..10),
+            ("swift", &["func f() {}"], 0, 0..4),
+            ("cmake", &["if(X)", "endif()"], 0, 0..2),
+            ("graphql", &["query Q {", "  a", "}"], 0, 0..5),
+            ("proto", &["message M {", "}"], 0, 0..7),
+        ];
+        let theme = HighlightTheme::default_dark();
+        for (grammar, lines, line, keyword) in cases {
+            let styles = highlight_once(grammar, lines, &theme);
+            assert!(
+                styles[line].iter().any(|(range, _)| *range == keyword),
+                "{grammar}: {:?}",
+                styles
+            );
+        }
     }
 
     #[test]

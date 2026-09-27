@@ -1611,6 +1611,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tgrep-core",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cmake",
+ "tree-sitter-swift",
  "which 7.0.3",
  "winreg 0.56.0",
 ]
