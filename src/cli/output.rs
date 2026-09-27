@@ -656,6 +656,7 @@ mod tests {
             root: PathBuf::from("/src/api"),
             branch: Some("main".into()),
             tags: vec![],
+            pull_every: None,
         };
         let verdict = |qualifier: &str, path: &str| {
             let query = SearchQuery {

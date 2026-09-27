@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
             root: index.root().to_path_buf(),
             branch: None,
             tags: vec![],
+            pull_every: None,
         }),
         corpus,
         changed: vec![],

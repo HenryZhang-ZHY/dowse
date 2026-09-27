@@ -423,6 +423,7 @@ impl ScopeSpec {
                     root: entry.path.clone(),
                     branch: repo::current_branch(&entry.path),
                     tags: entry.tags.clone(),
+                    pull_every: entry.pull_every,
                 })
             })
             .filter(|info| scope.includes(info))
@@ -490,6 +491,7 @@ mod tests {
             root: PathBuf::from("/src").join(name),
             branch: Some("main".into()),
             tags: vec![],
+            pull_every: None,
         })
     }
 
@@ -601,6 +603,8 @@ mod tests {
                 path,
                 name: name.into(),
                 tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                pull_every: None,
+                pulled_at: None,
             }
         };
         let library = Library {

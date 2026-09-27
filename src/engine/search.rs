@@ -558,6 +558,7 @@ mod tests {
             root: root.to_path_buf(),
             branch: None,
             tags: vec![],
+            pull_every: None,
         })
     }
 

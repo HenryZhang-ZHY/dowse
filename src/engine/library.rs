@@ -3,10 +3,12 @@
 //! owner), so they are kept here once rather than in each workspace.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::sync::Interval;
 use super::{repo, store};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +24,19 @@ pub struct LibraryEntry {
     pub name: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// How often dowse pulls it, when it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_every: Option<Interval>,
+    /// When dowse last tried to pull it, in seconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulled_at: Option<u64>,
+}
+
+impl LibraryEntry {
+    pub fn pulled_at(&self) -> Option<SystemTime> {
+        self.pulled_at
+            .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+    }
 }
 
 impl Library {
@@ -49,8 +64,39 @@ impl Library {
             path: path.to_path_buf(),
             name,
             tags: Vec::new(),
+            pull_every: None,
+            pulled_at: None,
         });
         true
+    }
+
+    /// Forget the repository. Returns `true` when it was known.
+    pub fn remove(&mut self, path: &Path) -> bool {
+        let before = self.repos.len();
+        self.repos.retain(|entry| entry.path != path);
+        self.repos.len() != before
+    }
+
+    /// Pull the repository every `every`, or never. Returns `true` when that
+    /// changed.
+    pub fn set_pull_every(&mut self, path: &Path, every: Option<Interval>) -> bool {
+        match self.repos.iter_mut().find(|entry| entry.path == path) {
+            Some(entry) if entry.pull_every != every => {
+                entry.pull_every = every;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Note that the repository was pulled at `time`.
+    pub fn set_pulled_at(&mut self, path: &Path, time: SystemTime) {
+        if let Some(entry) = self.repos.iter_mut().find(|entry| entry.path == path) {
+            entry.pulled_at = time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|since| since.as_secs());
+        }
     }
 
     /// Replace the repository's tags. Returns `true` when they changed.
@@ -83,9 +129,26 @@ mod tests {
         assert!(library.set_tags(Path::new("/dev/api"), vec!["dev".into()]));
         assert!(!library.set_tags(Path::new("/dev/api"), vec!["dev".into()]));
         assert!(!library.set_tags(Path::new("/nowhere"), vec!["dev".into()]));
+        let hourly = "1h".parse().ok();
+        assert!(library.set_pull_every(Path::new("/m/api"), hourly));
+        assert!(!library.set_pull_every(Path::new("/m/api"), hourly));
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        library.set_pulled_at(Path::new("/m/api"), now);
+        assert_eq!(library.repos[0].pulled_at(), Some(now));
         library.save(&file).unwrap();
 
         assert_eq!(Library::load(&file).unwrap(), library);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(r#""pull_every": "1h""#), "{text}");
+        assert_eq!(
+            text.matches("pull_every").count(),
+            1,
+            "unset fields stay out"
+        );
+
+        assert!(library.remove(Path::new("/m/api")));
+        assert!(!library.remove(Path::new("/m/api")));
+        assert_eq!(library.repos.len(), 1);
     }
 
     #[test]

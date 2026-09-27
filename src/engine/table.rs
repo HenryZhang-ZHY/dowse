@@ -348,6 +348,7 @@ mod tests {
             root: ".".into(),
             branch: branch.map(str::to_string),
             tags: vec![],
+            pull_every: None,
         })
     }
 

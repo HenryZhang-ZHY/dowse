@@ -199,6 +199,7 @@ mod tests {
             root: PathBuf::from(name),
             branch: Some(branch.into()),
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            pull_every: None,
         })
     }
 

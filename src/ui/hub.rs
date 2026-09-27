@@ -734,6 +734,7 @@ impl RepoState {
                 root: entry.path.clone(),
                 branch: repo::current_branch(&entry.path),
                 tags: entry.tags.clone(),
+                pull_every: entry.pull_every,
             }),
             activity: if index.is_some() {
                 IndexActivity::Loading

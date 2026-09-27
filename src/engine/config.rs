@@ -153,6 +153,8 @@ impl ConfigDir {
                     path: entry.path,
                     name: entry.name,
                     tags: entry.tags,
+                    pull_every: None,
+                    pulled_at: None,
                 })
                 .collect(),
         };

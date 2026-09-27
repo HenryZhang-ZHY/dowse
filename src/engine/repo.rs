@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use super::index::display_path;
+use super::sync::{Interval, SYNC_GROUP};
 
 /// The group of implicit tags naming the checked-out branch.
 pub const BRANCH_GROUP: &str = "branch";
@@ -24,6 +25,8 @@ pub struct RepoInfo {
     pub branch: Option<String>,
     /// Tags the user assigned, without the implicit branch tag.
     pub tags: Vec<String>,
+    /// How often dowse pulls it, shown as the implicit tag `sync:<interval>`.
+    pub pull_every: Option<Interval>,
 }
 
 impl RepoInfo {
@@ -35,11 +38,15 @@ impl RepoInfo {
         }
     }
 
-    /// The user's tags plus `branch:<name>`.
+    /// The user's tags plus `branch:<name>`, and `sync:<interval>` when
+    /// dowse pulls it.
     pub fn effective_tags(&self) -> Vec<String> {
         let mut tags = self.tags.clone();
         if let Some(branch) = &self.branch {
             tags.push(format!("{BRANCH_GROUP}:{branch}"));
+        }
+        if let Some(every) = self.pull_every {
+            tags.push(format!("{SYNC_GROUP}:{every}"));
         }
         tags
     }
@@ -247,6 +254,7 @@ mod tests {
             root: PathBuf::from(name),
             branch: branch.map(String::from),
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            pull_every: None,
         }
     }
 
@@ -281,6 +289,11 @@ mod tests {
 
         let on_main = Scope::new(["branch:main".to_string()]);
         assert!(on_main.includes(&api_main) && !on_main.includes(&api_dev));
+
+        let mut synced = api_main.clone();
+        synced.pull_every = "1h".parse().ok();
+        let hourly = Scope::new(["sync:1h".to_string()]);
+        assert!(hourly.includes(&synced) && !hourly.includes(&api_main));
     }
 
     #[test]

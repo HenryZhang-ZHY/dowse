@@ -619,6 +619,7 @@ mod tests {
             root: "/src/api".into(),
             branch: Some("main".into()),
             tags: vec!["owner:alice".into(), "mirror".into()],
+            pull_every: None,
         }
     }
 
