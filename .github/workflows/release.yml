@@ -14,6 +14,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Leave the symbol tables out of the binaries (about 18 MB on Linux);
+  # Windows keeps them in a .pdb beside the build, which is not shipped.
+  CARGO_PROFILE_RELEASE_STRIP: symbols
 
 jobs:
   version:
@@ -22,7 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       name: ${{ steps.version.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: version
         shell: bash
         run: |
@@ -43,7 +46,7 @@ jobs:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked --bins
       - name: Package
@@ -56,7 +59,7 @@ jobs:
           Copy-Item target\release\dowse-cli.exe "$dir\dowse.com"
           Copy-Item README.md, LICENSE $dir
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64
           path: dowse-*.zip
@@ -75,7 +78,7 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install GPUI's build dependencies
         run: |
           sudo apt-get update
@@ -91,7 +94,7 @@ jobs:
           mkdir "$dir"
           cp target/release/dowse README.md LICENSE "$dir"
           tar -czf "$dir.tar.gz" "$dir"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dowse-*.tar.gz
@@ -103,7 +106,7 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked --bin dowse --target aarch64-apple-darwin
@@ -123,7 +126,7 @@ jobs:
           codesign --force --deep --sign - "$app"
           cp README.md LICENSE "$dir"
           ditto -c -k --keepParent "$dir" "$dir.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-universal
           path: dowse-*.zip
@@ -136,7 +139,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
