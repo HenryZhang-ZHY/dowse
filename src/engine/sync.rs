@@ -76,9 +76,9 @@ impl fmt::Display for Interval {
     /// The largest unit that divides it: `90m`, `2h`, `3d`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let minutes = self.0.as_secs() / 60;
-        if minutes % (24 * 60) == 0 {
+        if minutes.is_multiple_of(24 * 60) {
             write!(f, "{}d", minutes / (24 * 60))
-        } else if minutes % 60 == 0 {
+        } else if minutes.is_multiple_of(60) {
             write!(f, "{}h", minutes / 60)
         } else {
             write!(f, "{minutes}m")
