@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::component::Root;
+use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::*;
 
 use super::app::{SearchApp, TabsOpening};
@@ -261,14 +261,16 @@ impl Windows {
         let mut bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         bounds.origin.x += offset;
         bounds.origin.y += offset;
+        // The app draws its own title bar: the header, with the window's
+        // buttons at its end.
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
                 title: Some("dowse".into()),
-                ..Default::default()
+                ..TitleBar::title_bar_options()
             }),
             window_min_size: Some(size(px(720.), px(480.))),
-            ..Default::default()
+            ..TitleBar::window_options()
         };
         let mut app = None;
         let handle = cx

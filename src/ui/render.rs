@@ -15,7 +15,7 @@ use gpui_kit::component::table::DataTable;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Root, Selectable as _, Sizable as _,
-    StyledExt as _, h_flex, h_resizable, resizable_panel, v_flex,
+    StyledExt as _, TitleBar, h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -45,6 +45,10 @@ const SIDEBAR_WIDTH: f32 = 240.;
 const LINE_NUMBER_WIDTH: f32 = 60.;
 /// The preview pane's starting width.
 const PREVIEW_WIDTH: f32 = 720.;
+/// The header, which is also the window's title bar.
+const TITLE_BAR_HEIGHT: f32 = 46.;
+/// Empty title bar kept beside the search box for dragging the window.
+const DRAG_GAP: f32 = 40.;
 
 impl Render for SearchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -184,71 +188,89 @@ impl SearchApp {
             IconName::Moon
         };
 
-        h_flex()
-            .flex_none()
-            .gap_3()
-            .px_4()
-            .py_2p5()
-            .border_b_1()
-            .border_color(theme.border)
+        // The header is the window's title bar: dragging it moves the window
+        // and a double click maximizes it, except over the controls, which
+        // occlude it so that clicks reach them.
+        TitleBar::new()
+            .h(px(TITLE_BAR_HEIGHT))
             .bg(theme.title_bar)
+            .border_color(theme.border)
             .child(
                 h_flex()
-                    .id("home")
-                    .flex_none()
-                    .gap_1p5()
-                    .cursor_pointer()
-                    .child(Icon::new(Lucide::TextSearch).text_color(theme.primary))
-                    .child(div().font_semibold().child("dowse"))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.show_page(Page::Search, window, cx)),
-                    ),
-            )
-            .child(self.render_workspace_menu(cx))
-            .child(
-                div().flex_1().max_w(px(960.)).child(
-                    Input::new(&self.tab().search_input)
-                        .prefix(Icon::new(IconName::Search).small().text_color(muted))
-                        .suffix(toggles)
-                        .cleanable(true)
-                        .disabled(!searchable),
-                ),
-            )
-            .when(path_filter_shown, |header| {
-                header.child(
-                    div().w(px(280.)).flex_none().child(
-                        Input::new(&self.tab().path_input)
-                            .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
-                            .cleanable(true)
-                            .disabled(!searchable),
-                    ),
-                )
-            })
-            .child(
-                h_flex()
-                    .flex_none()
-                    .ml_auto()
-                    .gap_1()
+                    .flex_1()
+                    .h_full()
+                    .gap_3()
+                    .pr_3()
+                    // Where the app is: its home, the workspace and its repositories.
                     .child(
-                        Button::new("command-palette")
-                            .ghost()
-                            .small()
-                            .icon(Lucide::Command)
-                            .tooltip("Command palette (Ctrl+K)")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.open_palette(window, cx)),
-                            ),
-                    )
-                    .child(repositories_button)
-                    .child(
-                        Button::new("toggle-theme")
-                            .ghost()
-                            .small()
-                            .icon(theme_icon)
-                            .tooltip("Toggle light and dark theme")
+                        h_flex()
+                            .id("home")
+                            .occlude()
+                            .flex_none()
+                            .gap_1p5()
+                            .cursor_pointer()
+                            .child(Icon::new(Lucide::TextSearch).text_color(theme.primary))
+                            .child(div().font_semibold().child("dowse"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_toggle_theme(&super::ToggleTheme, window, cx)
+                                this.show_page(Page::Search, window, cx)
                             })),
+                    )
+                    .child(
+                        h_flex()
+                            .occlude()
+                            .flex_none()
+                            .gap_0p5()
+                            .child(self.render_workspace_menu(cx))
+                            .child(repositories_button),
+                    )
+                    .child(
+                        div().occlude().flex_1().max_w(px(960.)).child(
+                            Input::new(&self.tab().search_input)
+                                .prefix(Icon::new(IconName::Search).small().text_color(muted))
+                                .suffix(toggles)
+                                .cleanable(true)
+                                .disabled(!searchable),
+                        ),
+                    )
+                    .when(path_filter_shown, |header| {
+                        header.child(
+                            div().occlude().w(px(280.)).flex_none().child(
+                                Input::new(&self.tab().path_input)
+                                    .prefix(Icon::new(Lucide::Funnel).small().text_color(muted))
+                                    .cleanable(true)
+                                    .disabled(!searchable),
+                            ),
+                        )
+                    })
+                    // Somewhere to take hold of the window, however narrow.
+                    .child(div().flex_none().w(px(DRAG_GAP)))
+                    // Tools, beside the window's own buttons.
+                    .child(
+                        h_flex()
+                            .occlude()
+                            .flex_none()
+                            .ml_auto()
+                            .gap_1()
+                            .child(
+                                Button::new("command-palette")
+                                    .ghost()
+                                    .small()
+                                    .icon(Lucide::Command)
+                                    .tooltip("Command palette (Ctrl+K)")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_palette(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("toggle-theme")
+                                    .ghost()
+                                    .small()
+                                    .icon(theme_icon)
+                                    .tooltip("Toggle light and dark theme")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_toggle_theme(&super::ToggleTheme, window, cx)
+                                    })),
+                            ),
                     ),
             )
     }
