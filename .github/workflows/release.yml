@@ -1,0 +1,154 @@
+# Builds dowse for Windows, Linux and macOS and publishes the archives as a
+# GitHub release. Pushing a tag `v<version>` (matching Cargo.toml) releases
+# it; running the workflow by hand builds the same archives as workflow
+# artifacts only, to try them before tagging.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      name: ${{ steps.version.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml's version $version"
+              exit 1
+            fi
+            name="$GITHUB_REF_NAME"
+          else
+            name="v$version-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bins
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "dowse-${{ needs.version.outputs.name }}-windows-x86_64"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target\release\dowse.exe $dir
+          # The console program, which terminals run for `dowse` (see README).
+          Copy-Item target\release\dowse-cli.exe "$dir\dowse.com"
+          Copy-Item README.md, LICENSE $dir
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dowse-*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 for an older glibc (2.35), so the binary runs on more distributions.
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GPUI's build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libegl-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            pkg-config clang
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin dowse
+      - name: Package
+        run: |
+          dir="dowse-${{ needs.version.outputs.name }}-linux-${{ matrix.arch }}"
+          mkdir "$dir"
+          cp target/release/dowse README.md LICENSE "$dir"
+          tar -czf "$dir.tar.gz" "$dir"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dowse-*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin dowse --target aarch64-apple-darwin
+      - run: cargo build --release --locked --bin dowse --target x86_64-apple-darwin
+      - name: Package a universal dowse.app
+        run: |
+          dir="dowse-${{ needs.version.outputs.name }}-macos-universal"
+          app="$dir/dowse.app"
+          mkdir -p "$app/Contents/MacOS"
+          lipo -create -output "$app/Contents/MacOS/dowse" \
+            target/aarch64-apple-darwin/release/dowse \
+            target/x86_64-apple-darwin/release/dowse
+          sed "s/@VERSION@/${{ needs.version.outputs.version }}/g" \
+            packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # Ad-hoc signed: Apple silicon runs nothing unsigned. Not notarized,
+          # so Gatekeeper asks once before the first start (see README).
+          codesign --force --deep --sign - "$app"
+          cp README.md LICENSE "$dir"
+          ditto -c -k --keepParent "$dir" "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dowse-*.zip
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, windows, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum dowse-* > SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "dowse ${{ needs.version.outputs.version }}" \
+            --generate-notes \
+            --verify-tag

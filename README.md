@@ -167,6 +167,27 @@ still open, and each repository keeps its `.tgrep` index.
   `Ctrl+Shift+O` opens a workspace and `Ctrl+Shift+S` saves one. `Ctrl+Shift+I` or
   `F12` opens the developer tools.
 
+## Download
+
+Each [release](https://github.com/HenryZhang-ZHY/dowse/releases/latest) has builds
+ready to run, with their checksums in `SHA256SUMS`:
+
+| Platform | Archive | What's in it |
+| --- | --- | --- |
+| Windows (x64) | `dowse-<version>-windows-x86_64.zip` | `dowse.exe`, the app, and `dowse.com`, the command line (see below). Unzip them to a folder, and add it to `PATH` to run `dowse` in a terminal. |
+| macOS 11 or later (Apple silicon and Intel) | `dowse-<version>-macos-universal.zip` | `dowse.app`. Move it to Applications. For the command line, link `/Applications/dowse.app/Contents/MacOS/dowse` into a folder on `PATH`. |
+| Linux (x64, arm64) | `dowse-<version>-linux-<arch>.tar.gz` | `dowse`, both the app and the command line. Needs glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36), X11 or Wayland, and a Vulkan driver. |
+
+The builds are not signed with a paid certificate, so the system asks once before
+the first start. On Windows, SmartScreen's "Windows protected your PC" has a
+**More info** link, then **Run anyway**. On macOS, open `dowse.app` once, then allow
+it under System Settings > Privacy & Security > **Open Anyway**, or clear the
+quarantine flag the browser set:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/dowse.app
+```
+
 ## Build and run
 
 Requires a recent stable Rust (the repository's `mise.toml` pins `latest`).
@@ -274,6 +295,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | `src/shell.rs` | Explorer integration on Windows. |
 | `src/editor.rs` | Launching an editor at a line. |
 | `src/fuzzy.rs` | Fuzzy matching for the command palette. |
+| `.github/workflows/release.yml` | Builds the release archives for Windows, Linux and macOS when a `v<version>` tag is pushed, and publishes them. |
+| `packaging/macos/Info.plist` | The `Info.plist` of the macOS `dowse.app`. |
 | `examples/bench.rs` | Times indexing and a few searches: `cargo run --release --example bench -- <folder> [pattern...]`. |
 
 ## How a search runs
@@ -301,6 +324,18 @@ cargo test
 ```
 
 The engine tests build real indexes in temporary directories.
+
+## Releasing
+
+Set the version in `Cargo.toml`, commit, and push a tag of it:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The release workflow builds every platform's archive and publishes them as the
+tag's release. Running the workflow by hand from the Actions tab builds the same
+archives as workflow artifacts, without releasing, to try them first.
 
 ## License
 
