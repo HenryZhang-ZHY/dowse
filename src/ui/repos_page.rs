@@ -2,6 +2,7 @@
 //! and act on several at once (pull, index, tag, sync, remove); an owner's
 //! GitHub repositories, to clone; and the background tasks.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -870,14 +871,13 @@ impl SearchApp {
     // ----- GitHub ---------------------------------------------------------------------
 
     fn render_github_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let github = &self.manager.github;
         let listing = &github.listing;
         let loading = listing.is_loading();
         let listed = listing.repos().len();
         let shown = github.visible.len();
-        let chosen = github.selected.len();
         let owner = listing.owner.clone();
         let repositories = format::plural(listed, "repository", "repositories");
 
@@ -896,6 +896,9 @@ impl SearchApp {
                 .into_any_element(),
             ListingState::Loaded => div()
                 .child(format!("{repositories} of {owner}"))
+                .into_any_element(),
+            ListingState::Stopped if listed == 0 => div()
+                .child(format!("Stopped before GitHub answered for {owner}"))
                 .into_any_element(),
             ListingState::Stopped => div()
                 .child(format!("Stopped after {repositories} of {owner}"))
@@ -969,16 +972,7 @@ impl SearchApp {
             .pb_2()
             .gap_3()
             .child(
-                Checkbox::new("select-all-remote")
-                    .checked(chosen > 0 && chosen >= shown)
-                    .tooltip("Select every repository shown that is not cloned yet")
-                    .disabled(shown == 0)
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.select_all_remote(*checked, cx)
-                    })),
-            )
-            .child(
-                div().w(px(380.)).child(
+                div().w(px(420.)).child(
                     Input::new(&github.filter)
                         .small()
                         .cleanable(true)
@@ -1019,6 +1013,13 @@ impl SearchApp {
                     empty_state(Lucide::Github, "Could not list the repositories", error, cx)
                         .into_any_element()
                 }
+                ListingState::Stopped if listed == 0 => empty_state(
+                    Lucide::CircleStop,
+                    "Listing stopped",
+                    "List again to see the owner's repositories.",
+                    cx,
+                )
+                .into_any_element(),
                 _ => empty_state(
                     IconName::Search,
                     if listed == 0 {
@@ -1034,7 +1035,8 @@ impl SearchApp {
         } else {
             let statuses = self.remote_statuses(cx);
             let root = self.destination_root(cx);
-            div()
+            let header = self.render_github_header(&statuses, root.as_ref(), cx);
+            v_flex()
                 .flex_1()
                 .min_h_0()
                 .mx_6()
@@ -1042,6 +1044,7 @@ impl SearchApp {
                 .border_color(theme.border)
                 .rounded(theme.radius_lg)
                 .overflow_hidden()
+                .child(header)
                 .child(
                     uniform_list(
                         "github-repositories",
@@ -1073,7 +1076,8 @@ impl SearchApp {
                                 .collect::<Vec<_>>()
                         }),
                     )
-                    .size_full()
+                    .flex_1()
+                    .min_h_0()
                     .track_scroll(&self.manager.github.scroll),
                 )
                 .into_any_element()
@@ -1086,6 +1090,107 @@ impl SearchApp {
             .child(filters)
             .child(list)
             .child(self.render_clone_bar(cx))
+    }
+
+    /// The top of the GitHub table: a box that selects every repository
+    /// shown that can be cloned, and the column names.
+    fn render_github_header(
+        &self,
+        statuses: &HashMap<String, RemoteStatus>,
+        root: Option<&PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let github = &self.manager.github;
+        let repos = github.listing.repos();
+        let selected = github.selected.len();
+        let shown_selected = github
+            .visible
+            .iter()
+            .filter(|index| github.selected.contains(&repos[**index].full_name))
+            .count();
+        // Only with something selected: every row shown is then asked
+        // whether it can be cloned, which the disk answers once.
+        let chosen = if shown_selected == 0 {
+            Chosen::None
+        } else {
+            let clonable = github
+                .visible
+                .iter()
+                .filter(|index| {
+                    matches!(
+                        self.remote_status(&repos[**index], statuses, root),
+                        RemoteStatus::Available | RemoteStatus::Failed(_)
+                    )
+                })
+                .count();
+            Chosen::of(shown_selected, clonable)
+        };
+        let column = |width: f32, text: &'static str| {
+            div().w(px(width)).flex_none().text_right().child(text)
+        };
+        h_flex()
+            .flex_none()
+            .h(px(HEADER_HEIGHT))
+            .px_3()
+            .gap_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(if selected == 0 {
+                theme.table_head
+            } else {
+                theme.accent
+            })
+            .child(select_all_box(
+                "select-all-remote",
+                chosen,
+                github.visible.is_empty(),
+                if chosen == Chosen::All {
+                    "Clear the selection"
+                } else {
+                    "Select every repository shown that is not cloned yet"
+                },
+                cx.listener(move |this, _, _, cx| {
+                    this.select_all_remote(chosen != Chosen::All, cx)
+                }),
+                cx,
+            ))
+            .map(|row| {
+                if selected == 0 {
+                    row.text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(div().flex_1().child("Repository"))
+                        .child(div().w(px(110.)).flex_none().child("Language"))
+                        .child(column(70., "Size"))
+                        .child(column(80., "Pushed"))
+                        .child(column(150., ""))
+                } else {
+                    row.text_color(theme.accent_foreground)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .child(format!("{selected} selected")),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("Choose where and how below, then Clone"),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("clear-remote")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .label("Clear")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.select_all_remote(false, cx)),
+                                ),
+                        )
+                }
+            })
     }
 
     /// Where and how the chosen repositories are cloned.

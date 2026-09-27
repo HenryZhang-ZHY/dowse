@@ -776,9 +776,8 @@ impl SearchApp {
             return status.clone();
         }
         let present = root.is_some_and(|root| {
-            github::clone_destination(root, &repo.full_name)
-                .join(".git")
-                .exists()
+            let folder = github::clone_destination(root, &repo.full_name);
+            self.manager.is_git(&folder.to_string_lossy())
         });
         if present || statuses.get(&repo.full_name) == Some(&RemoteStatus::Cloned) {
             RemoteStatus::Cloned
