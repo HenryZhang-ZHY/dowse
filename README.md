@@ -1,4 +1,9 @@
-# dowse
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/dowse-wordmark-dark.svg">
+    <img alt="dowse" src="docs/brand/dowse-wordmark-light.svg" height="48">
+  </picture>
+</h1>
 
 Search code across many repositories at once, from a desktop app or the command
 line, in the spirit of [grep.app](https://grep.app) and GitHub code search, but over
