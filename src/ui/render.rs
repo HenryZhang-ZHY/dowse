@@ -1321,32 +1321,50 @@ impl SearchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let in_scope = self.in_scope(&self.repo_views(cx)).count();
+        // Each shortcut keeps its line; its description wraps below it when
+        // the sidebar and the preview leave the results little room.
         let tip = |key: &'static str, text: &'static str| {
             h_flex()
-                .gap_3()
+                .w_full()
+                .flex_wrap()
+                .items_start()
+                .gap_x_3()
                 .child(
                     div()
-                        .w(px(190.))
                         .flex_none()
+                        .w(px(190.))
+                        .whitespace_nowrap()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
                         .child(key),
                 )
-                .child(div().text_color(muted).child(text))
+                .child(
+                    div()
+                        .flex_basis(px(220.))
+                        .flex_grow(1.)
+                        .min_w_0()
+                        .text_color(muted)
+                        .child(text),
+                )
         };
-        v_flex()
-            .flex_1()
-            .size_full()
+        let content = v_flex()
+            .flex_none()
+            .w_full()
+            .min_h_full()
             .items_center()
             .justify_center()
             .gap_4()
+            .px_6()
+            .py_6()
             .child(brand_mark().large().text_color(muted))
-            .child(div().text_lg().font_semibold().child(format!(
+            .child(div().text_lg().font_semibold().text_center().child(format!(
                 "Search {}",
                 format::plural(in_scope, "repository", "repositories")
             )))
             .child(
                 v_flex()
+                    .w_full()
+                    .max_w(px(560.))
                     .gap_1p5()
                     .text_sm()
                     .child(tip("parse config", "Files containing both, on any lines"))
@@ -1368,7 +1386,15 @@ impl SearchApp {
                     .child(tip("Click a line", "Preview the file there"))
                     .child(tip("F4  Shift+F4", "Next and previous match"))
                     .child(tip("Ctrl+Click", "Open in your editor directly")),
-            )
+            );
+        // Scrolls when narrow results make the tips taller than the window.
+        v_flex()
+            .id("tips")
+            .flex_1()
+            .size_full()
+            .min_w_0()
+            .child(content)
+            .overflow_y_scrollbar()
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
