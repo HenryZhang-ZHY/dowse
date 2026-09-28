@@ -1,6 +1,6 @@
 [package]
 name = "dowse"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "Search code across many repositories, from a desktop app or the command line"
 license = "MIT"
