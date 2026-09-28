@@ -67,7 +67,7 @@ impl Render for SearchApp {
                         .flex_1()
                         .min_h_0()
                         .items_start()
-                        .child(self.render_sidebar(cx))
+                        .when(self.sidebar_open, |row| row.child(self.render_sidebar(cx)))
                         .child(self.render_results_and_preview(window, cx)),
                 )
                 .into_any_element(),
@@ -95,6 +95,19 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_previous_tab))
             .on_action(cx.listener(Self::on_close_preview))
             .on_action(cx.listener(Self::on_toggle_preview))
+            .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(Self::on_go_back))
+            .on_action(cx.listener(Self::on_go_forward))
+            .on_action(cx.listener(Self::on_about))
+            // A mouse's back and forward buttons.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, window, cx| this.go_back(window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, window, cx| this.go_forward(window, cx)),
+            )
             .on_action(cx.listener(Self::on_next_match))
             .on_action(cx.listener(Self::on_previous_match))
             .on_action(cx.listener(Self::on_toggle_results_view))
@@ -168,25 +181,40 @@ impl SearchApp {
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_path_filter(window, cx))),
             );
 
-        let on_repositories = self.page == Page::Repositories;
-        let repositories_button = Button::new("repositories")
+        let sidebar_button = Button::new("toggle-sidebar")
             .ghost()
             .small()
-            .icon(Lucide::FolderGit2)
-            .label(format!("Repositories · {}", self.members.len()))
-            .selected(on_repositories)
-            .tooltip("Add, tag and index repositories (Ctrl+,)")
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let page = if on_repositories {
-                    Page::Search
-                } else {
-                    Page::Repositories
-                };
-                this.show_page(page, window, cx)
-            }));
+            .icon(IconName::PanelLeft)
+            .selected(previewable_page(self) && self.sidebar_open)
+            .disabled(!previewable_page(self))
+            .tooltip(if self.sidebar_open {
+                "Hide the filters (Ctrl+B)"
+            } else {
+                "Show the filters (Ctrl+B)"
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
+        let history = &self.tab().history;
+        let back_button = Button::new("go-back")
+            .ghost()
+            .small()
+            .icon(IconName::ArrowLeft)
+            .disabled(!self.can_go_back())
+            .tooltip(if self.page == Page::Repositories {
+                "Back to the search (Alt+Left)"
+            } else {
+                "Back to the previous search (Alt+Left)"
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx)));
+        let forward_button = Button::new("go-forward")
+            .ghost()
+            .small()
+            .icon(IconName::ArrowRight)
+            .disabled(!history.can_go_forward())
+            .tooltip("Forward to the next search (Alt+Right)")
+            .on_click(cx.listener(|this, _, window, cx| this.go_forward(window, cx)));
 
         let preview_open = self.tab().preview_open;
-        let previewable = self.page == Page::Search && searchable;
+        let previewable = previewable_page(self);
         let preview_button = Button::new("toggle-preview")
             .ghost()
             .small()
@@ -213,27 +241,17 @@ impl SearchApp {
                     .h_full()
                     .gap_3()
                     .pr_3()
-                    // Where the app is: its home, the workspace and its repositories.
-                    .child(
-                        h_flex()
-                            .id("home")
-                            .occlude()
-                            .flex_none()
-                            .gap_1p5()
-                            .cursor_pointer()
-                            .child(brand_mark().text_color(theme.foreground))
-                            .child(div().font_semibold().child("dowse"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_page(Page::Search, window, cx)
-                            })),
-                    )
+                    // The menu, the sidebar, and back and forward through the
+                    // tab's searches.
                     .child(
                         h_flex()
                             .occlude()
                             .flex_none()
                             .gap_0p5()
-                            .child(self.render_workspace_menu(cx))
-                            .child(repositories_button),
+                            .child(self.render_main_menu(cx))
+                            .child(sidebar_button)
+                            .child(back_button)
+                            .child(forward_button),
                     )
                     .child(
                         div().occlude().flex_1().max_w(px(960.)).child(
@@ -307,84 +325,6 @@ impl SearchApp {
                                     .ok();
                             }),
                     )
-            })
-    }
-
-    /// The workspace's name, opening a menu to switch, save or open another.
-    fn render_workspace_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let app = cx.entity().downgrade();
-        let saved = self.workspace.is_some();
-        let current = self.workspace.clone();
-        let recent: Vec<PathBuf> = Windows::recent(cx)
-            .into_iter()
-            .filter(|file| Some(file) != current.as_ref())
-            .collect();
-        let item =
-            move |label: &str,
-                  icon: Lucide,
-                  run: fn(&mut SearchApp, &mut Window, &mut Context<SearchApp>)| {
-                let app = app.clone();
-                PopupMenuItem::new(label.to_string())
-                    .icon(Icon::new(icon))
-                    .on_click(move |_, window, cx| {
-                        app.update(cx, |this, cx| run(this, window, cx)).ok();
-                    })
-            };
-        let open_recent = {
-            let app = cx.entity().downgrade();
-            move |file: PathBuf| {
-                let app = app.clone();
-                let label = format!("{}  ·  {}", workspace::name(&file), short_dir(&file));
-                PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                    let file = file.clone();
-                    app.update(cx, |this, cx| this.open_workspace_file(file, window, cx))
-                        .ok();
-                })
-            }
-        };
-
-        Button::new("workspace-menu")
-            .ghost()
-            .small()
-            .icon(Lucide::Layers)
-            .label(self.workspace_name())
-            .tooltip("Switch, save or open a workspace")
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
-                let mut menu = menu
-                    .item(item(
-                        "New Window (Ctrl+Shift+N)",
-                        Lucide::AppWindow,
-                        |_, _, cx| {
-                            Windows::new_window(cx);
-                        },
-                    ))
-                    .item(item(
-                        "New Workspace",
-                        Lucide::FilePlus,
-                        |this, window, cx| this.new_workspace(window, cx),
-                    ))
-                    .item(item(
-                        "Open Workspace… (Ctrl+Shift+O)",
-                        Lucide::FolderOpen,
-                        |this, window, cx| this.prompt_open_workspace(window, cx),
-                    ))
-                    .item(item(
-                        if saved {
-                            "Save Workspace As… (Ctrl+Shift+S)"
-                        } else {
-                            "Save Workspace… (Ctrl+Shift+S)"
-                        },
-                        Lucide::Save,
-                        |this, window, cx| this.save_workspace_as(window, cx).detach(),
-                    ));
-                if !recent.is_empty() {
-                    menu = menu.separator().label("Recent");
-                    for file in &recent {
-                        menu = menu.item(open_recent(file.clone()));
-                    }
-                }
-                menu
             })
     }
 
@@ -1469,12 +1409,26 @@ impl SearchApp {
                         .children(recent.into_iter().enumerate().map(|(index, file)| {
                             let label = workspace::name(&file);
                             let dir = short_dir(&file);
+                            let forget = file.clone();
                             h_flex()
                                 .id(("welcome-recent", index))
                                 .gap_2()
                                 .cursor_pointer()
                                 .child(div().text_color(link).child(label))
                                 .child(div().text_xs().text_color(muted).child(dir))
+                                .child(
+                                    Button::new(("welcome-forget-recent", index))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .tooltip("Remove from recent workspaces")
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            // Not the row's click, which opens it.
+                                            cx.stop_propagation();
+                                            Windows::forget_recent(&forget, cx);
+                                            cx.notify();
+                                        })),
+                                )
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_workspace_file(file.clone(), window, cx)
                                 }))
@@ -1498,7 +1452,15 @@ impl SearchApp {
             .border_color(theme.status_bar_border)
             .bg(theme.status_bar)
             .text_xs()
-            .text_color(muted);
+            .text_color(muted)
+            // The title bar no longer shows it.
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .child(Icon::new(Lucide::Layers).xsmall())
+                    .child(self.workspace_name()),
+            );
         let tasks = self.render_task_status(cx);
         let repos = self.repo_views(cx);
         if repos.is_empty() {
@@ -1741,6 +1703,12 @@ fn option_toggle(
         .selected(selected)
         .toggled(selected)
         .tooltip(tooltip)
+}
+
+/// The search page with results to show: where the sidebar and the preview
+/// pane are.
+fn previewable_page(app: &SearchApp) -> bool {
+    app.page == Page::Search && !app.members.is_empty()
 }
 
 /// dowse's mark, as an icon: drawn in the text colour unless given another.

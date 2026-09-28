@@ -421,6 +421,16 @@ impl Windows {
         Self::save(cx);
     }
 
+    /// Take `file` off the recent list, as asked; the file and its saved
+    /// scope stay.
+    pub(super) fn forget_recent(file: &Path, cx: &mut App) {
+        cx.global_mut::<Self>()
+            .session
+            .recent
+            .retain(|recent| recent != file);
+        Self::save(cx);
+    }
+
     /// Drop a workspace file that can no longer be opened.
     pub(super) fn forget(file: &Path, cx: &mut App) {
         cx.global_mut::<Self>().session.forget(file);

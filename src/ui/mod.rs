@@ -5,7 +5,9 @@
 mod app;
 mod devtools;
 mod highlight;
+mod history;
 mod hub;
+mod main_menu;
 mod manager;
 mod palette;
 mod preview;
@@ -54,6 +56,10 @@ actions!(
         PreviousTab,
         ClosePreview,
         TogglePreview,
+        ToggleSidebar,
+        GoBack,
+        GoForward,
+        About,
         NextMatch,
         PreviousMatch,
         ToggleResultsView,
@@ -96,6 +102,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("escape", ClosePreview, Some(CONTEXT)),
         // VS Code's secondary side bar.
         KeyBinding::new("secondary-alt-b", TogglePreview, Some(CONTEXT)),
+        KeyBinding::new("secondary-b", ToggleSidebar, Some(CONTEXT)),
         KeyBinding::new("f4", NextMatch, Some(CONTEXT)),
         KeyBinding::new("shift-f4", PreviousMatch, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-e", ExportResults, Some(CONTEXT)),
@@ -111,6 +118,9 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("cmd-alt-w", ToggleWholeWord, Some(CONTEXT)),
         KeyBinding::new("cmd-alt-r", ToggleRegex, Some(CONTEXT)),
         KeyBinding::new("cmd-alt-t", ToggleResultsView, Some(CONTEXT)),
+        // VS Code's; Alt+Left moves by word in the search box here.
+        KeyBinding::new("ctrl--", GoBack, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift--", GoForward, Some(CONTEXT)),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
     #[cfg(not(target_os = "macos"))]
@@ -119,6 +129,8 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("alt-w", ToggleWholeWord, Some(CONTEXT)),
         KeyBinding::new("alt-r", ToggleRegex, Some(CONTEXT)),
         KeyBinding::new("alt-t", ToggleResultsView, Some(CONTEXT)),
+        KeyBinding::new("alt-left", GoBack, Some(CONTEXT)),
+        KeyBinding::new("alt-right", GoForward, Some(CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &NewWindow, cx| {

@@ -12,6 +12,7 @@ use gpui_kit::*;
 use regex::Regex;
 
 use super::app::{SearchApp, SnippetSyntax};
+use super::history::History;
 use super::preview::Preview;
 use super::table::{ResultsView, TableView};
 use super::windows::Windows;
@@ -48,6 +49,8 @@ pub(super) struct SearchTab {
     /// The preview pane is shown. Previewing a line opens it; the title bar
     /// hides and shows it again, keeping its file, or opens it empty.
     pub(super) preview_open: bool,
+    /// The searches to go back and forward to.
+    pub(super) history: History,
     pub(super) view: ResultsView,
     /// The results as a table, built when first shown and dropped when the
     /// results or facet filters change.
@@ -190,6 +193,7 @@ impl SearchApp {
             stale: true,
             preview: None,
             preview_open: false,
+            history: History::default(),
             view: ResultsView::default(),
             table: None,
             _subscriptions: subscriptions,
@@ -212,6 +216,7 @@ impl SearchApp {
         if self.tabs.len() == 1 {
             let tab = self.tab_mut();
             tab.cancel();
+            tab.history = History::default();
             let (search_input, path_input) = (tab.search_input.clone(), tab.path_input.clone());
             search_input.update(cx, |input, cx| input.set_value("", window, cx));
             path_input.update(cx, |input, cx| input.set_value("", window, cx));

@@ -87,6 +87,8 @@ impl SearchApp {
         line: usize,
         cx: &mut Context<Self>,
     ) {
+        // Looking at a result makes its search a step to come back to.
+        self.settle_search(cx);
         let tab = self.tab_mut();
         tab.preview_open = true;
         if let Some(preview) = tab.preview.as_mut()
@@ -121,6 +123,8 @@ impl SearchApp {
         let Some(preview) = tab.preview.as_mut() else {
             return;
         };
+        // This load replaces one that may still be on its way to the line.
+        let reveal = reveal || matches!(preview.state, PreviewState::Loading);
         let file = full_path(&preview.repo.root, &preview.path);
         let grammar = preview.language.and_then(highlight::grammar);
         let (repo, path) = (preview.repo.clone(), preview.path.clone());

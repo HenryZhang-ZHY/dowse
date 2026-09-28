@@ -16,6 +16,7 @@ use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
 use super::highlight::{self, Highlighters, LineStyles};
+use super::history::History;
 use super::hub::{IndexJob, RepoHub};
 use super::manager::Manager;
 use super::repos::TagInputs;
@@ -63,6 +64,8 @@ pub struct SearchApp {
     /// The path filter box is shown, though the search box's `path:` does
     /// the same. It shows anyway while a tab has a path filter.
     pub(super) path_filter_open: bool,
+    /// The filters sidebar is shown beside the results.
+    pub(super) sidebar_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -123,6 +126,7 @@ impl SearchApp {
             next_tab_id: 0,
             highlighters: Highlighters::default(),
             path_filter_open: false,
+            sidebar_open: true,
             _subscriptions: subscriptions,
         };
         let mut queries = tabs.queries;
@@ -159,6 +163,7 @@ impl SearchApp {
             tab.facet_filter = FacetFilter::default();
             tab.set_results(None);
             tab.preview = None;
+            tab.history = History::default();
             tab.stale = true;
         }
         cx.notify();
@@ -177,7 +182,10 @@ impl SearchApp {
         }
         match event {
             InputEvent::Change => self.run_search(true, cx),
-            InputEvent::PressEnter { .. } => self.run_search(false, cx),
+            InputEvent::PressEnter { .. } => {
+                self.run_search(false, cx);
+                self.settle_search(cx);
+            }
             InputEvent::Focus | InputEvent::Blur => {}
         }
     }
@@ -220,6 +228,7 @@ impl SearchApp {
     pub(super) fn run_search(&mut self, debounce: bool, cx: &mut Context<Self>) {
         let (sources, waiting) = self.search_sources(cx);
         let query = self.tab().query(cx);
+        self.note_search(&query, cx);
         let tab = self.tab_mut();
         tab.cancel();
         tab.stale = false;
@@ -345,6 +354,7 @@ impl SearchApp {
         let tab = self.tab_mut();
         tab.facet_filter.toggle(kind, value);
         tab.refresh_visible();
+        self.settle_search(cx);
         cx.notify();
     }
 
@@ -352,6 +362,7 @@ impl SearchApp {
         let tab = self.tab_mut();
         tab.facet_filter.clear(kind);
         tab.refresh_visible();
+        self.settle_search(cx);
         cx.notify();
     }
 
@@ -373,16 +384,19 @@ impl SearchApp {
     pub(super) fn set_case_sensitive(&mut self, value: bool, cx: &mut Context<Self>) {
         self.tab_mut().case_sensitive = value;
         self.run_search(false, cx);
+        self.settle_search(cx);
     }
 
     pub(super) fn set_whole_word(&mut self, value: bool, cx: &mut Context<Self>) {
         self.tab_mut().whole_word = value;
         self.run_search(false, cx);
+        self.settle_search(cx);
     }
 
     pub(super) fn set_regex(&mut self, value: bool, cx: &mut Context<Self>) {
         self.tab_mut().regex = value;
         self.run_search(false, cx);
+        self.settle_search(cx);
     }
 
     // ----- opening hits -----------------------------------------------------

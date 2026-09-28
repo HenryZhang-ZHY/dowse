@@ -28,12 +28,16 @@ facet narrows them to Rust, and the table lays them out one row per line.
   you like; windows sharing a repository share its index and file watcher. The open
   windows, untitled workspaces included, come back on the next start. Closing a
   window with an unsaved workspace, while others stay open, asks whether to save it.
-- **The repositories page** (`Ctrl+,`) manages a workspace's repositories. Filter
+  The menu's Workspace section opens, saves and switches workspaces, and lists the
+  recent ones; the `×` beside one takes it off the list (the file stays). The
+  window's workspace shows at the left of the status bar.
+- **The repositories page** (`Ctrl+,`, or Repositories in the menu) manages a workspace's repositories. Filter
   them by name, path, branch or tag, select several (the box in the table's header
   takes every one shown, and the header then holds what to do) and pull them, update or rebuild
   their indexes, add or remove tags (`-tag` removes one), set how often they are
   pulled, or take them out of the workspace. A row opens to its tags and pull
-  settings, and shows its index and how its last pull went.
+  settings, and shows its index and how its last pull went. Back (`Alt+Left`)
+  returns to the search.
 
   ![The repositories page: cloned repositories with their branch, owner and mirror tags, and how many files each index holds](docs/images/repositories-page.webp)
 - **Clone from GitHub, many at once.** The page's GitHub section lists an owner's
@@ -76,7 +80,8 @@ facet narrows them to Rust, and the table lays them out one row per line.
   workspace sees them; the scope is remembered per workspace.
 - **Facets narrow the results** without changing the scope: repository, branch, each
   tag group, language and top-level directory, each counted under the others'
-  filters, as on grep.app.
+  filters, as on grep.app. The sidebar button at the left of the title bar
+  (`Ctrl+B`) hides them for more room.
 
   ![Results for trigram index -path:test across tgrep, Zoekt, Google codesearch, Hound, Django and Go, with repository, branch, owner and language facets](docs/images/search-across-repositories.webp)
 - **GitHub code search syntax**, as you type. Terms combine per file, not per line:
@@ -127,6 +132,18 @@ facet narrows them to Rust, and the table lays them out one row per line.
   `Ctrl+Shift+Tab` (or `Ctrl+PageDown/PageUp`) step through them, and a middle click
   closes one. Each tab has its own query, options, path filter and facet filters; the
   scope is the window's. Tabs come back with their window on the next start.
+- **Back and forward** through a tab's searches, as in a browser: the arrows at the
+  left of the title bar, `Alt+Left` and `Alt+Right` (`Ctrl+-` and `Ctrl+Shift+-` on
+  macOS), or a mouse's back and forward buttons. Going back brings the search back
+  with its filters and the file it was previewing. A search counts as a step once
+  you pause, press `Enter`, change an option or filter, or preview a result, so
+  typing a query is one step, not one per letter.
+- **The menu** at the left of the title bar holds every command by kind: File
+  (windows and tabs), Workspace (new, open, save, recent), Repositories (the
+  repositories page, adding and cloning, pulling and indexing, background tasks),
+  View (back and forward, the sidebar and preview pane, the table, the theme, the
+  command palette) and Help (the project on GitHub, release notes, reporting an
+  issue, About).
 - **Preview in place**: click a line to see the whole file beside the results,
   coloured by language, with the query's matches marked and the line in view; no
   waiting for an editor to start. Drag the divider to resize it and `Esc` closes it.
@@ -300,7 +317,7 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 | Path | What it holds |
 | --- | --- |
 | `src/engine/` | The search engine and saved settings, a library with no UI dependency. `github.rs` lists and clones GitHub repositories through `gh`; `sync.rs` pulls a repository when it is safe to and parses pull intervals; `tasks.rs` queues background tasks; `process.rs` runs git and gh. `index.rs` opens, builds, updates and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names and tags, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings. |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page, `repos_page.rs` the repositories page and `manager.rs` its state; `tasks.rs` runs clones and pulls and pulls on schedule; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `history.rs` their back and forward, `main_menu.rs` the title bar's menu, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page, `repos_page.rs` the repositories page and `manager.rs` its state; `tasks.rs` runs clones and pulls and pulls on schedule; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
 | `src/cli/` | The `dowse` subcommands: `args.rs` their options, `client.rs` reaching the running app (starting it in the background when need be), `output.rs` formatting its answers as text or JSON. |
 | `src/ipc/` | Keeping to one running app, and how the command line talks to it: later launches and subcommands send a JSON line over a local socket and read JSON lines back (`protocol.rs`). |
 | `src/diagnostics/` | The log (a ring buffer and a rotating file) and the metrics, with no UI dependency. |

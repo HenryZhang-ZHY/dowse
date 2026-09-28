@@ -481,6 +481,42 @@ impl SearchApp {
                 .keywords(&["workspace"]),
             );
         }
+        if self.can_go_back() {
+            commands.push(
+                command("View", "Back", IconName::ArrowLeft, |this, w, cx| {
+                    this.go_back(w, cx)
+                })
+                .action(GoBack)
+                .keywords(&["previous search", "history"]),
+            );
+        }
+        if tab.history.can_go_forward() {
+            commands.push(
+                command("View", "Forward", IconName::ArrowRight, |this, w, cx| {
+                    this.go_forward(w, cx)
+                })
+                .action(GoForward)
+                .keywords(&["next search", "history"]),
+            );
+        }
+        commands.push(
+            command(
+                "View",
+                "Filters Sidebar",
+                IconName::PanelLeft,
+                |this, _, cx| this.toggle_sidebar(cx),
+            )
+            .action(ToggleSidebar)
+            .checked(self.sidebar_open)
+            .keywords(&["facets", "show", "hide"]),
+        );
+        commands.push(
+            command("View", "About dowse", IconName::Info, |this, w, cx| {
+                this.open_about(w, cx)
+            })
+            .action(About)
+            .keywords(&["version"]),
+        );
         commands.push(
             command("View", "Developer Tools", Lucide::Bug, |_, _, cx| {
                 super::devtools::open(cx);
