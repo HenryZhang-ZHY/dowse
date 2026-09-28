@@ -130,6 +130,8 @@ facet narrows them to Rust, and the table lays them out one row per line.
 - **Preview in place**: click a line to see the whole file beside the results,
   coloured by language, with the query's matches marked and the line in view; no
   waiting for an editor to start. Drag the divider to resize it and `Esc` closes it.
+  The pane button at the right of the title bar (`Ctrl+Alt+B`) hides the pane and
+  brings it back on the same file.
   `F4` and `Shift+F4` step through the matches, on into the next or previous file.
   Each tab keeps its own preview. The preview is for reading; nothing is edited.
 
@@ -168,13 +170,14 @@ facet narrows them to Rust, and the table lays them out one row per line.
   index load, build and update timings, log problems) and the latest searches with what each
   read and found. Copy Diagnostics puts it all on the clipboard. The command line
   reads the same with `dowse dev logs` and `dowse dev metrics`.
-- **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works) lists
-  every command with its shortcut, plus the open tabs, the scope's tags, recent
+- **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works), or the
+  `⋮` menu at the right of the title bar, lists every command with its shortcut,
+  plus the open tabs, the scope's tags, recent
   workspaces and the query qualifiers, which it adds to the query. Type a few letters
   of the name in order, `nt` for New Tab, and press `Enter`; `Esc` clears the
   filter, then closes.
-- Light and dark themes. `Ctrl+O` adds repositories, `Ctrl+,` opens the repositories
-  page (the palette also has Clone from GitHub, Pull Repositories in Scope and Show
+- Light and dark themes, switched from the `⋮` menu. `Ctrl+O` adds repositories,
+  `Ctrl+,` opens the repositories page (the palette also has Clone from GitHub, Pull Repositories in Scope and Show
   Background Tasks), `Ctrl+F` focuses the search box, `Ctrl+P` opens the path filter, and
   `Ctrl+Shift+R` updates the indexes in scope (the palette also rebuilds them from
   scratch). `Ctrl+Shift+N` opens a new window,

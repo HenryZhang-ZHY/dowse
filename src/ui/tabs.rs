@@ -45,6 +45,9 @@ pub(super) struct SearchTab {
     pub(super) stale: bool,
     /// The result file shown beside the results.
     pub(super) preview: Option<Preview>,
+    /// The preview pane is shown. Previewing a line opens it; the title bar
+    /// hides and shows it again, keeping its file, or opens it empty.
+    pub(super) preview_open: bool,
     pub(super) view: ResultsView,
     /// The results as a table, built when first shown and dropped when the
     /// results or facet filters change.
@@ -186,6 +189,7 @@ impl SearchApp {
             search_cancel: Arc::new(AtomicBool::new(false)),
             stale: true,
             preview: None,
+            preview_open: false,
             view: ResultsView::default(),
             table: None,
             _subscriptions: subscriptions,

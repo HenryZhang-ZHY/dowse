@@ -53,6 +53,7 @@ actions!(
         NextTab,
         PreviousTab,
         ClosePreview,
+        TogglePreview,
         NextMatch,
         PreviousMatch,
         ToggleResultsView,
@@ -78,8 +79,9 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("secondary-o", AddRepository, Some(CONTEXT)),
         KeyBinding::new("secondary-,", ShowRepositories, Some(CONTEXT)),
         KeyBinding::new("secondary-f", FocusSearch, Some(CONTEXT)),
-        KeyBinding::new("secondary-k", CommandPalette, Some(CONTEXT)),
+        // Menus show the last binding of an action: Ctrl+K, as the tooltips say.
         KeyBinding::new("secondary-shift-p", CommandPalette, Some(CONTEXT)),
+        KeyBinding::new("secondary-k", CommandPalette, Some(CONTEXT)),
         KeyBinding::new("secondary-p", FocusPathFilter, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-r", UpdateIndex, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-n", NewWindow, Some(CONTEXT)),
@@ -92,6 +94,8 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
         KeyBinding::new("ctrl-pagedown", NextTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-pageup", PreviousTab, Some(CONTEXT)),
         KeyBinding::new("escape", ClosePreview, Some(CONTEXT)),
+        // VS Code's secondary side bar.
+        KeyBinding::new("secondary-alt-b", TogglePreview, Some(CONTEXT)),
         KeyBinding::new("f4", NextMatch, Some(CONTEXT)),
         KeyBinding::new("shift-f4", PreviousMatch, Some(CONTEXT)),
         KeyBinding::new("secondary-shift-e", ExportResults, Some(CONTEXT)),

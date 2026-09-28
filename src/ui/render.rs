@@ -14,7 +14,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Selectable as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Selectable as _, Side, Sizable as _,
     StyledExt as _, TitleBar, h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -29,6 +29,7 @@ use super::table::ResultsView;
 use super::tabs::file_key;
 use super::tasks::TaskHub;
 use super::windows::Windows;
+use super::{CommandPalette, ToggleTheme};
 use crate::assets::BRAND_MARK;
 use crate::format;
 use dowse::engine::facets::FacetKind;
@@ -93,6 +94,7 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))
             .on_action(cx.listener(Self::on_close_preview))
+            .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_next_match))
             .on_action(cx.listener(Self::on_previous_match))
             .on_action(cx.listener(Self::on_toggle_results_view))
@@ -183,11 +185,20 @@ impl SearchApp {
                 this.show_page(page, window, cx)
             }));
 
-        let theme_icon = if theme.is_dark() {
-            IconName::Sun
-        } else {
-            IconName::Moon
-        };
+        let preview_open = self.tab().preview_open;
+        let previewable = self.page == Page::Search && searchable;
+        let preview_button = Button::new("toggle-preview")
+            .ghost()
+            .small()
+            .icon(IconName::PanelRight)
+            .selected(previewable && preview_open)
+            .disabled(!previewable)
+            .tooltip(if preview_open {
+                "Hide the preview (Ctrl+Alt+B)"
+            } else {
+                "Show the preview (Ctrl+Alt+B)"
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_preview(cx)));
 
         // The header is the window's title bar: dragging it moves the window
         // and a double click maximizes it, except over the controls, which
@@ -252,28 +263,51 @@ impl SearchApp {
                             .flex_none()
                             .ml_auto()
                             .gap_1()
-                            .child(
-                                Button::new("command-palette")
-                                    .ghost()
-                                    .small()
-                                    .icon(Lucide::Command)
-                                    .tooltip("Command palette (Ctrl+K)")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_palette(window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("toggle-theme")
-                                    .ghost()
-                                    .small()
-                                    .icon(theme_icon)
-                                    .tooltip("Toggle light and dark theme")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_toggle_theme(&super::ToggleTheme, window, cx)
-                                    })),
-                            ),
+                            .child(preview_button)
+                            .child(self.render_more_menu(cx)),
                     ),
             )
+    }
+
+    /// What is seldom needed from the title bar: the command palette, which
+    /// Ctrl+K opens anyway, and the theme.
+    fn render_more_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let app = cx.entity().downgrade();
+        Button::new("more-menu")
+            .ghost()
+            .small()
+            .icon(IconName::EllipsisVertical)
+            .tooltip("More")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, cx| {
+                let dark = cx.theme().is_dark();
+                let (palette, theme) = (app.clone(), app.clone());
+                menu.min_w(px(240.))
+                    .check_side(Side::Right)
+                    .item(
+                        PopupMenuItem::new("Command Palette")
+                            .icon(Icon::new(Lucide::Command))
+                            // For its shortcut; the click runs the handler.
+                            .action(Box::new(CommandPalette))
+                            .on_click(move |_, window, cx| {
+                                palette
+                                    .update(cx, |this, cx| this.open_palette(window, cx))
+                                    .ok();
+                            }),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new("Dark Theme")
+                            .icon(Icon::new(IconName::Moon))
+                            .checked(dark)
+                            .on_click(move |_, window, cx| {
+                                theme
+                                    .update(cx, |this, cx| {
+                                        this.on_toggle_theme(&ToggleTheme, window, cx)
+                                    })
+                                    .ok();
+                            }),
+                    )
+            })
     }
 
     /// The workspace's name, opening a menu to switch, save or open another.

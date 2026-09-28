@@ -1,7 +1,8 @@
 //! The preview pane: clicking a result shows its whole file beside the
 //! results, coloured by language and scrolled to the line, without waiting
 //! for an editor to start. From there the file opens in the editor at the
-//! chosen line. Each tab has its own preview.
+//! chosen line. Each tab has its own preview, and its pane can be hidden
+//! and shown again from the title bar.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use gpui_kit::*;
 use super::app::{SearchApp, full_path};
 use super::highlight::{self, LineStyles};
 use super::render::{centered_message, code_text};
-use super::{ClosePreview, NextMatch, PreviousMatch};
+use super::{ClosePreview, NextMatch, PreviousMatch, TogglePreview};
 use crate::format;
 use dowse::engine::preview::{self, FilePreview};
 use dowse::engine::repo::RepoInfo;
@@ -87,6 +88,7 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) {
         let tab = self.tab_mut();
+        tab.preview_open = true;
         if let Some(preview) = tab.preview.as_mut()
             && preview.shows(&repo, &path)
         {
@@ -167,7 +169,16 @@ impl SearchApp {
     }
 
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
-        self.tab_mut().preview = None;
+        let tab = self.tab_mut();
+        tab.preview = None;
+        tab.preview_open = false;
+        cx.notify();
+    }
+
+    /// Hide the preview pane, keeping its file, or show it again.
+    pub(super) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        let tab = self.tab_mut();
+        tab.preview_open = !tab.preview_open;
         cx.notify();
     }
 
@@ -245,11 +256,20 @@ impl SearchApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tab().preview.is_some() {
+        if self.tab().preview_open {
             self.close_preview(cx);
         } else {
             cx.propagate();
         }
+    }
+
+    pub(super) fn on_toggle_preview(
+        &mut self,
+        _: &TogglePreview,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_preview(cx);
     }
 
     pub(super) fn on_next_match(&mut self, _: &NextMatch, _: &mut Window, cx: &mut Context<Self>) {
@@ -268,7 +288,27 @@ impl SearchApp {
     // ----- rendering -------------------------------------------------------------
 
     pub(super) fn render_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let preview = self.tab().preview.as_ref()?;
+        let tab = self.tab();
+        if !tab.preview_open {
+            return None;
+        }
+        let Some(preview) = tab.preview.as_ref() else {
+            return Some(
+                v_flex()
+                    .id("preview")
+                    .size_full()
+                    .min_w_0()
+                    .border_l_1()
+                    .border_color(cx.theme().border)
+                    .child(centered_message(
+                        cx,
+                        Icon::new(IconName::PanelRight).text_color(cx.theme().muted_foreground),
+                        "Nothing to preview",
+                        "Click a line in the results to show its file here.".to_string(),
+                    ))
+                    .into_any_element(),
+            );
+        };
         let theme = cx.theme();
         let (border, muted, header_bg) = (theme.border, theme.muted_foreground, theme.secondary);
         let (radius, chip_bg) = (theme.radius, theme.background);

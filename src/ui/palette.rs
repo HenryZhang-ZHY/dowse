@@ -267,7 +267,18 @@ impl SearchApp {
             )
             .action(PreviousMatch),
         ]);
-        if tab.preview.is_some() {
+        commands.push(
+            command(
+                "Results",
+                "Preview Pane",
+                IconName::PanelRight,
+                |this, w, cx| this.on_toggle_preview(&TogglePreview, w, cx),
+            )
+            .action(TogglePreview)
+            .checked(tab.preview_open)
+            .keywords(&["show", "hide", "file"]),
+        );
+        if tab.preview_open {
             commands.push(
                 command(
                     "Results",
