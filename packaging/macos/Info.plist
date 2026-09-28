@@ -8,6 +8,8 @@
 	<string>dowse</string>
 	<key>CFBundleExecutable</key>
 	<string>dowse</string>
+	<key>CFBundleIconFile</key>
+	<string>dowse</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.henryzhang-zhy.dowse</string>
 	<key>CFBundleInfoDictionaryVersion</key>

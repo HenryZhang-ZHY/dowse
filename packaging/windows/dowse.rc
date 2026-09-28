@@ -1,0 +1,3 @@
+// Resource 1 is the icon Explorer shows for the programs, and the one GPUI
+// loads for the window and the taskbar.
+1 ICON "dowse.ico"

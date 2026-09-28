@@ -29,6 +29,7 @@ use super::table::ResultsView;
 use super::tabs::file_key;
 use super::tasks::TaskHub;
 use super::windows::Windows;
+use crate::assets::BRAND_MARK;
 use crate::format;
 use dowse::engine::facets::FacetKind;
 use dowse::engine::repo::{self, BRANCH_GROUP};
@@ -209,7 +210,7 @@ impl SearchApp {
                             .flex_none()
                             .gap_1p5()
                             .cursor_pointer()
-                            .child(Icon::new(Lucide::TextSearch).text_color(theme.primary))
+                            .child(brand_mark().text_color(theme.foreground))
                             .child(div().font_semibold().child("dowse"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_page(Page::Search, window, cx)
@@ -1305,7 +1306,7 @@ impl SearchApp {
             .items_center()
             .justify_center()
             .gap_4()
-            .child(Icon::new(Lucide::TextSearch).large().text_color(muted))
+            .child(brand_mark().large().text_color(muted))
             .child(div().text_lg().font_semibold().child(format!(
                 "Search {}",
                 format::plural(in_scope, "repository", "repositories")
@@ -1351,7 +1352,7 @@ impl SearchApp {
             .items_center()
             .justify_center()
             .gap_4()
-            .child(Icon::new(Lucide::TextSearch).size(px(48.)).text_color(theme.primary))
+            .child(brand_mark().size(px(48.)).text_color(theme.foreground))
             .child(div().text_2xl().font_semibold().child("Search across your repositories"))
             .child(
                 div()
@@ -1680,6 +1681,11 @@ fn option_toggle(
         .selected(selected)
         .toggled(selected)
         .tooltip(tooltip)
+}
+
+/// dowse's mark, as an icon: drawn in the text colour unless given another.
+pub(super) fn brand_mark() -> Icon {
+    Icon::empty().path(BRAND_MARK)
 }
 
 pub(super) fn centered_message(

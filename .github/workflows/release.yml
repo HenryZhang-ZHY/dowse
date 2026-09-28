@@ -115,7 +115,8 @@ jobs:
         run: |
           dir="dowse-${{ needs.version.outputs.name }}-macos-universal"
           app="$dir/dowse.app"
-          mkdir -p "$app/Contents/MacOS"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp packaging/macos/dowse.icns "$app/Contents/Resources/"
           lipo -create -output "$app/Contents/MacOS/dowse" \
             target/aarch64-apple-darwin/release/dowse \
             target/x86_64-apple-darwin/release/dowse
