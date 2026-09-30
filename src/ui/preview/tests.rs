@@ -243,7 +243,7 @@ fn changed_source_reuses_editor_and_clamps_cursor(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn native_editor_preserves_long_lines_and_scrolls_horizontally(cx: &mut TestAppContext) {
+fn native_editor_wraps_long_lines_without_changing_source(cx: &mut TestAppContext) {
     let text = format!("{}\tfoo  \n", "a".repeat(20_000));
     let (view, cx) = open(cx, &text, 1);
     let state = cx.read(|cx| view.read(cx).preview.editor.as_ref().unwrap().state.clone());
@@ -256,7 +256,9 @@ fn native_editor_preserves_long_lines_and_scrolls_horizontally(cx: &mut TestAppC
     cx.read(|cx| {
         assert_eq!(state.read(cx).text().to_string(), text);
         assert_eq!(state.read(cx).selected_text().to_string(), "\tfoo  ");
-        assert!(state.read(cx).scroll_offset().x < px(0.));
+        assert_eq!(state.read(cx).scroll_offset().x, px(0.));
+        assert!(state.read(cx).scroll_offset().y < px(0.));
+        assert!(state.read(cx).range_to_bounds(&(20_000..20_006)).is_some());
         assert_eq!(view.read(cx).preview.current_line(cx), 1);
     });
 }

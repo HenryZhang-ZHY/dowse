@@ -96,7 +96,7 @@ impl Preview {
                     .language(language)
                     .searchable(false)
                     .default_value(SharedString::new(file.text.clone()));
-                state.set_soft_wrap(false, window, cx);
+                state.set_soft_wrap(true, window, cx);
                 state.set_line_number(true, window, cx);
                 state.set_folding(false, window, cx);
                 state.set_readonly(true, cx);

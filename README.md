@@ -154,7 +154,7 @@ facet narrows them to Rust, and the table lays them out one row per line.
   Its read-only Editor provides text selection and copying: drag across lines,
   double-click a word or triple-click a line, then press `Ctrl+C` (`Cmd+C` on
   macOS). Tabs, trailing whitespace and long lines stay in the source text;
-  long lines scroll horizontally instead of wrapping. Match marks use the
+  long lines wrap to the pane's width without changing the source. Match marks use the
   Editor's native decorations, and jumps use its normal scroll-to-cursor behavior.
   Selection, line numbers and scrolling use the library's standard UI, without
   custom row backgrounds or bold match-line numbers. Syntax highlighting follows
