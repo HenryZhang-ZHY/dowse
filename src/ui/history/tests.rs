@@ -1,3 +1,6 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use gpui_kit as gpui;
 use gpui_kit::component::Root;
 use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
@@ -7,6 +10,7 @@ use crate::ui::app::{Page, SearchApp, TabsOpening};
 use crate::ui::tasks::TaskHub;
 use crate::ui::windows::{Opening, Windows};
 use dowse::engine::facets::FacetKind;
+use dowse::engine::repo::RepoInfo;
 
 fn open(cx: &mut TestAppContext) -> (Entity<SearchApp>, &mut VisualTestContext) {
     let config = tempfile::tempdir().unwrap().keep();
@@ -82,6 +86,43 @@ fn language(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> Option<Strin
             .facet_filter
             .get(&FacetKind::Language)
             .map(str::to_string)
+    })
+}
+
+/// A repository at `root` holding `a.txt` and `b.txt`.
+fn repo(root: &Path) -> Arc<RepoInfo> {
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(root.join(name), "one\ntwo\nthree\n").unwrap();
+    }
+    Arc::new(RepoInfo {
+        id: "test".into(),
+        name: "test".into(),
+        root: root.to_path_buf(),
+        branch: None,
+        tags: Vec::new(),
+        pull_every: None,
+    })
+}
+
+/// Click line `line` of `path` in the results.
+fn pick(
+    app: &Entity<SearchApp>,
+    repo: &Arc<RepoInfo>,
+    path: &str,
+    line: usize,
+    cx: &mut VisualTestContext,
+) {
+    let (repo, path) = (repo.clone(), path.to_string());
+    app.update(cx, |this, cx| this.pick_hit(repo, path, None, line, cx));
+    cx.run_until_parked();
+}
+
+fn previewed(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> Option<String> {
+    app.read_with(cx, |this, _| {
+        this.tab()
+            .preview
+            .as_ref()
+            .map(|preview| preview.path.clone())
     })
 }
 
@@ -254,5 +295,36 @@ fn clearing_a_filter_that_is_not_set_is_no_step(cx: &mut TestAppContext) {
     type_query(&app, "foo", cx);
     pause(cx);
     app.update(cx, |this, cx| this.clear_facet(&FacetKind::Language, cx));
+    assert_eq!(can_go(&app, cx), (false, false));
+}
+
+#[gpui::test]
+fn previewing_another_file_is_a_step(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    pause(cx);
+    pick(&app, &repo, "a.txt", 1, cx);
+    pick(&app, &repo, "a.txt", 3, cx);
+    pick(&app, &repo, "b.txt", 2, cx);
+
+    back(&app, cx);
+    assert_eq!(previewed(&app, cx).as_deref(), Some("a.txt"));
+    back(&app, cx);
+    assert_eq!(previewed(&app, cx), None);
+    assert_eq!(can_go(&app, cx), (false, true));
+    forward(&app, cx);
+    forward(&app, cx);
+    assert_eq!(previewed(&app, cx).as_deref(), Some("b.txt"));
+}
+
+#[gpui::test]
+fn previewing_while_typing_is_part_of_the_same_step(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    pick(&app, &repo, "a.txt", 1, cx);
     assert_eq!(can_go(&app, cx), (false, false));
 }

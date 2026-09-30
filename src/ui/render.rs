@@ -1076,7 +1076,7 @@ impl SearchApp {
                                 this.open_hit(&open_repo.root, &open_path, first_line, window, cx)
                             } else {
                                 let repo = open_repo.clone();
-                                this.preview_hit(repo, open_path.clone(), language, first_line, cx)
+                                this.pick_hit(repo, open_path.clone(), language, first_line, cx)
                             }
                         })),
                 )
@@ -1239,7 +1239,7 @@ impl SearchApp {
                 if event.modifiers().secondary() {
                     this.open_hit(&repo.root, &path, number, window, cx)
                 } else {
-                    this.preview_hit(repo.clone(), path.clone(), language, number, cx)
+                    this.pick_hit(repo.clone(), path.clone(), language, number, cx)
                 }
             }))
     }

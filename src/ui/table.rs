@@ -248,7 +248,7 @@ impl SearchApp {
         if open {
             self.open_hit(&file.repo.root, &file.path, line, window, cx);
         } else {
-            self.preview_hit(
+            self.pick_hit(
                 file.repo.clone(),
                 file.path.clone(),
                 file.language,

@@ -196,6 +196,27 @@ impl Preview {
 }
 
 impl SearchApp {
+    /// Preview a result the user picked. Another file than the one shown is
+    /// a step, as following a link is; another line of it is not.
+    pub(super) fn pick_hit(
+        &mut self,
+        repo: Arc<RepoInfo>,
+        path: String,
+        language: Option<&'static str>,
+        line: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.tab();
+        if !tab
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.shows(&repo, &path))
+        {
+            self.note_view(cx);
+        }
+        self.preview_hit(repo, path, language, line, cx);
+    }
+
     /// Show `path` of `repo` in the current tab's preview, at `line`.
     pub(super) fn preview_hit(
         &mut self,
