@@ -17,6 +17,9 @@ env:
   # Leave the symbol tables out of the binaries (about 18 MB on Linux);
   # Windows keeps them in a .pdb beside the build, which is not shipped.
   CARGO_PROFILE_RELEASE_STRIP: symbols
+  # Tells the build it is a release, which looks for updates on its own;
+  # a build from source does not (see src/ui/updates.rs).
+  DOWSE_RELEASE: "1"
 
 jobs:
   version:

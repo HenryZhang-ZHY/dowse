@@ -18,6 +18,7 @@ mod repos_page;
 mod table;
 mod tabs;
 mod tasks;
+mod updates;
 mod windows;
 mod workspace;
 
@@ -60,6 +61,7 @@ actions!(
         GoBack,
         GoForward,
         About,
+        CheckForUpdates,
         NextMatch,
         PreviousMatch,
         ToggleResultsView,
@@ -78,6 +80,7 @@ pub fn init(config_root: PathBuf, cx: &mut App) {
     cx.set_quit_mode(QuitMode::Explicit);
     windows::Windows::init(config_root, cx);
     tasks::TaskHub::init(cx);
+    updates::UpdateHub::init(cx);
     remote::Remote::init(cx);
     cx.on_window_closed(|cx, _| windows::Windows::closed(cx))
         .detach();

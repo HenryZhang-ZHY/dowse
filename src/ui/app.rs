@@ -21,6 +21,7 @@ use super::manager::Manager;
 use super::repos::TagInputs;
 use super::tabs::SearchTab;
 use super::tasks::TaskHub;
+use super::updates::UpdateHub;
 use super::windows::{Opening, Windows};
 use super::{
     AddRepository, CloseTab, FocusPathFilter, FocusSearch, NewTab, NewWorkspace, NextTab,
@@ -95,6 +96,11 @@ impl SearchApp {
             cx.subscribe_in(&hub, window, Self::on_hub_event),
             cx.observe(&hub, |_, _, cx| cx.notify()),
             cx.observe(&tasks, |_, _, cx| cx.notify()),
+            // The update dialog shows how an update goes as it goes.
+            cx.observe_in(&UpdateHub::global(cx), window, |_, _, window, cx| {
+                cx.notify();
+                window.refresh();
+            }),
             cx.observe_global::<Theme>(|this, cx| this.theme_changed(cx)),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {

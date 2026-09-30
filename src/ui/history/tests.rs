@@ -8,6 +8,7 @@ use gpui_kit::{AppContext as _, Entity, ListOffset, TestAppContext, VisualTestCo
 use super::SETTLE_AFTER;
 use crate::ui::app::{Page, SearchApp, TabsOpening};
 use crate::ui::tasks::TaskHub;
+use crate::ui::updates::UpdateHub;
 use crate::ui::windows::{Opening, Windows};
 use dowse::engine::facets::FacetKind;
 use dowse::engine::repo::RepoInfo;
@@ -18,6 +19,7 @@ fn open(cx: &mut TestAppContext) -> (Entity<SearchApp>, &mut VisualTestContext) 
         gpui_kit::component::init(cx);
         Windows::init(config, cx);
         TaskHub::init(cx);
+        UpdateHub::init(cx);
     });
     let mut app = None;
     let (_, cx) = cx.add_window_view(|window, cx| {

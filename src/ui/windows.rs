@@ -448,7 +448,7 @@ impl Windows {
         cx.defer(Self::save_now);
     }
 
-    fn save_now(cx: &mut App) {
+    pub(super) fn save_now(cx: &mut App) {
         let states: Vec<WindowSession> = cx
             .global::<Self>()
             .open

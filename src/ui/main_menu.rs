@@ -16,6 +16,7 @@ use super::app::{Page, SearchApp};
 use super::manager::Section;
 use super::render::{brand_mark, short_dir};
 use super::table::ResultsView;
+use super::updates::UpdateHub;
 use super::windows::Windows;
 use super::*;
 use dowse::engine::workspace;
@@ -293,10 +294,24 @@ fn view_menu(
         )
 }
 
-fn help_menu(menu: PopupMenu, app: &WeakEntity<SearchApp>) -> PopupMenu {
+fn help_menu(menu: PopupMenu, app: &WeakEntity<SearchApp>, automatic: bool) -> PopupMenu {
     menu.link("dowse on GitHub", REPOSITORY)
         .link("Release Notes", format!("{REPOSITORY}/releases"))
         .link("Report an Issue", format!("{REPOSITORY}/issues/new"))
+        .separator()
+        .item(command(
+            app,
+            "Check for Updates…",
+            Some(Box::new(CheckForUpdates)),
+            |this, w, cx| this.check_for_updates(w, cx),
+        ))
+        .item(
+            PopupMenuItem::new("Check for Updates Automatically")
+                .checked(automatic)
+                .on_click(move |_, _, cx| {
+                    UpdateHub::global(cx).update(cx, |hub, cx| hub.set_automatic(!automatic, cx));
+                }),
+        )
         .separator()
         .item(command(app, "About dowse", None, |this, w, cx| {
             this.open_about(w, cx)
@@ -325,6 +340,7 @@ impl SearchApp {
             .tooltip("Menu")
             .dropdown_menu(move |menu, window, cx| {
                 let dark = cx.theme().is_dark();
+                let automatic = UpdateHub::global(cx).read(cx).automatic();
                 let (file, repos, view, help) =
                     (app.clone(), app.clone(), app.clone(), app.clone());
                 let (workspace_app, workspace) = (app.clone(), workspace.clone());
@@ -339,7 +355,9 @@ impl SearchApp {
                     .submenu("View", window, cx, move |menu, _, _| {
                         view_menu(menu, &view, state, dark)
                     })
-                    .submenu("Help", window, cx, move |menu, _, _| help_menu(menu, &help))
+                    .submenu("Help", window, cx, move |menu, _, _| {
+                        help_menu(menu, &help, automatic)
+                    })
             })
     }
 
@@ -402,5 +420,14 @@ impl SearchApp {
 
     pub(super) fn on_about(&mut self, _: &About, window: &mut Window, cx: &mut Context<Self>) {
         self.open_about(window, cx);
+    }
+
+    pub(super) fn on_check_for_updates(
+        &mut self,
+        _: &CheckForUpdates,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.check_for_updates(window, cx);
     }
 }

@@ -518,6 +518,16 @@ impl SearchApp {
             .keywords(&["version"]),
         );
         commands.push(
+            command(
+                "View",
+                "Check for Updates…",
+                Lucide::Download,
+                |this, w, cx| this.check_for_updates(w, cx),
+            )
+            .action(CheckForUpdates)
+            .keywords(&["update", "upgrade", "version", "release", "install"]),
+        );
+        commands.push(
             command("View", "Developer Tools", Lucide::Bug, |_, _, cx| {
                 super::devtools::open(cx);
             })

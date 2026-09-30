@@ -99,6 +99,7 @@ impl Render for SearchApp {
             .on_action(cx.listener(Self::on_go_back))
             .on_action(cx.listener(Self::on_go_forward))
             .on_action(cx.listener(Self::on_about))
+            .on_action(cx.listener(Self::on_check_for_updates))
             // A mouse's back and forward buttons.
             .on_mouse_down(
                 MouseButton::Navigate(NavigationDirection::Back),
@@ -1451,11 +1452,13 @@ impl SearchApp {
                     .child(self.workspace_name()),
             );
         let tasks = self.render_task_status(cx);
+        let update = self.render_update_status(cx);
         let repos = self.repo_views(cx);
         if repos.is_empty() {
             return bar
                 .child("No repositories yet")
                 .child(div().flex_1())
+                .children(update)
                 .children(tasks);
         }
 
@@ -1503,6 +1506,7 @@ impl SearchApp {
             in_scope.len()
         ))
         .child(div().flex_1())
+        .children(update)
         .children(tasks)
         .when_some(activity, |bar, activity| {
             bar.child(Spinner::new().xsmall()).child(activity)
