@@ -1041,13 +1041,7 @@ impl SearchApp {
                 (file.repo.clone(), file.path.clone(), file.language);
             let (reveal_root, reveal_path) = (root.clone(), file.path.clone());
             let copy_path = full_display_path(&root, &file.path);
-            h_flex()
-                .gap_2()
-                .px_3()
-                .py_1p5()
-                .bg(header_bg)
-                .border_b_1()
-                .border_color(border)
+            result_card_header(radius_lg, header_bg, border)
                 .when(multi_repo, |row| {
                     row.child(
                         h_flex()
@@ -1758,4 +1752,69 @@ fn visible_snippets(file: &FileMatch, expanded: bool) -> (&[Snippet], usize) {
         count += 1;
     }
     (&file.snippets[..count], kept - shown_matches)
+}
+
+fn result_card_header(radius: Pixels, background: Hsla, border: Hsla) -> Div {
+    h_flex()
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .bg(background)
+        .rounded_t(radius)
+        .border_b_1()
+        .border_color(border)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_card_header;
+    use gpui_kit as gpui;
+    use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, v_flex};
+    use gpui_kit::{
+        Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext, Window, px,
+    };
+
+    struct Card;
+
+    impl Render for Card {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme();
+            v_flex()
+                .w(px(240.))
+                .h(px(100.))
+                .border_1()
+                .border_color(theme.border)
+                .rounded(theme.radius_lg)
+                .overflow_hidden()
+                .child(
+                    result_card_header(theme.radius_lg, theme.secondary, theme.border).h(px(40.)),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn result_header_paints_rounded_top_corners_in_both_themes(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (_, cx) = cx.add_window_view(|_, _| Card);
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+                let scale = window.scale_factor();
+                let radius = cx.theme().radius_lg.scale(scale);
+                let quads = window.painted_quads();
+                let header = quads
+                    .iter()
+                    .find(|quad| {
+                        quad.bounds.size.height == px(40.).scale(scale)
+                            && quad.border_widths == Default::default()
+                    })
+                    .expect("the header background must be painted");
+                assert_eq!(header.corner_radii.top_left, radius);
+                assert_eq!(header.corner_radii.top_right, radius);
+                assert_eq!(header.corner_radii.bottom_left, Default::default());
+                assert_eq!(header.corner_radii.bottom_right, Default::default());
+            });
+        }
+    }
 }
