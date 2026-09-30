@@ -58,7 +58,14 @@ struct Replacement {
 impl Installation {
     /// The install `exe`, the running program, belongs to.
     pub fn detect(exe: &Path) -> Result<Self> {
-        let exe = fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+        // Through the links on the way, so a program linked into a folder on
+        // `PATH` is replaced where it is. Windows names the program itself,
+        // and canonical paths there are verbatim (`\\?\C:\…`).
+        let exe = if cfg!(windows) {
+            exe.to_path_buf()
+        } else {
+            fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf())
+        };
         if let Some(app) = bundle_of(&exe) {
             if app
                 .components()
