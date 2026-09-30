@@ -58,7 +58,7 @@ jobs:
           $dir = "dowse-${{ needs.version.outputs.name }}-windows-x86_64"
           New-Item -ItemType Directory $dir | Out-Null
           Copy-Item target\release\dowse.exe $dir
-          # The console program, which terminals run for `dowse` (see README).
+          # The console program, which terminals run for `dowse` (see docs/install.md).
           Copy-Item target\release\dowse-cli.exe "$dir\dowse.com"
           Copy-Item README.md, LICENSE $dir
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
@@ -126,7 +126,7 @@ jobs:
           sed "s/@VERSION@/${{ needs.version.outputs.version }}/g" \
             packaging/macos/Info.plist > "$app/Contents/Info.plist"
           # Ad-hoc signed: Apple silicon runs nothing unsigned. Not notarized,
-          # so Gatekeeper asks once before the first start (see README).
+          # so Gatekeeper asks once before the first start (see docs/install.md).
           codesign --force --deep --sign - "$app"
           cp README.md LICENSE "$dir"
           ditto -c -k --keepParent "$dir" "$dir.zip"
