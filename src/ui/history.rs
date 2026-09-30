@@ -37,6 +37,8 @@ struct Visit {
     facet_filter: FacetFilter,
     preview: Option<PreviewSpot>,
     preview_open: bool,
+    /// How far the results were scrolled.
+    scroll: ListOffset,
 }
 
 /// The file a preview showed, and where.
@@ -63,6 +65,7 @@ impl Visit {
                     .then(|| preview.current_offset(cx)),
             }),
             preview_open: tab.preview_open,
+            scroll: tab.list_state.logical_scroll_top(),
         }
     }
 }
@@ -256,6 +259,7 @@ impl SearchApp {
         tab.whole_word = visit.query.whole_word;
         tab.regex = visit.query.regex;
         tab.facet_filter = visit.facet_filter;
+        tab.scroll_on_results = Some((visit.query.clone(), visit.scroll));
         tab.preview = None;
         tab.preview_open = false;
         // Settled already, so searching for it again is no new step.

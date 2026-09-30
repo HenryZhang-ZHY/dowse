@@ -298,6 +298,12 @@ impl SearchApp {
                     let tab = &mut this.tabs[index];
                     tab.searching = waiting;
                     tab.set_results(Some((outcome, matcher)));
+                    if let Some((_, offset)) = tab
+                        .scroll_on_results
+                        .take_if(|(scrolled, _)| *scrolled == query)
+                    {
+                        tab.list_state.scroll_to(offset);
+                    }
                     // Mark the new query's matches in the file being previewed.
                     if tab.preview.is_some() {
                         this.load_preview(index, false, cx);

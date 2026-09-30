@@ -51,6 +51,9 @@ pub(super) struct SearchTab {
     pub(super) preview_open: bool,
     /// The searches to go back and forward to.
     pub(super) history: History,
+    /// Where to scroll the results once this query's search finishes, as
+    /// going back to it does.
+    pub(super) scroll_on_results: Option<(SearchQuery, ListOffset)>,
     pub(super) view: ResultsView,
     /// The results as a table, built when first shown and dropped when the
     /// results or facet filters change.
@@ -194,6 +197,7 @@ impl SearchApp {
             preview: None,
             preview_open: false,
             history: History::default(),
+            scroll_on_results: None,
             view: ResultsView::default(),
             table: None,
             _subscriptions: subscriptions,

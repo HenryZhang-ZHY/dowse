@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gpui_kit as gpui;
 use gpui_kit::component::Root;
-use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+use gpui_kit::{AppContext as _, Entity, ListOffset, TestAppContext, VisualTestContext, px};
 
 use super::SETTLE_AFTER;
 use crate::ui::app::{Page, SearchApp, TabsOpening};
@@ -353,4 +353,62 @@ fn each_keystroke_waits_again(cx: &mut TestAppContext) {
     cx.run_until_parked();
     type_query(&app, "x", cx);
     assert_eq!(can_go(&app, cx), (false, false));
+}
+
+/// Make the window search a folder of `count` files, each holding `foo`.
+fn search_files(app: &Entity<SearchApp>, root: &Path, count: usize, cx: &mut VisualTestContext) {
+    for index in 0..count {
+        std::fs::write(root.join(format!("{index:03}.txt")), "foo\n").unwrap();
+    }
+    let root = root.to_path_buf();
+    app.update(cx, |this, cx| {
+        let ids = this
+            .hub
+            .update(cx, |hub, _| hub.register(&[root], false))
+            .unwrap();
+        this.set_members(ids, cx);
+    });
+    cx.run_until_parked();
+}
+
+fn result_count(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> usize {
+    app.read_with(cx, |this, _| {
+        this.tab()
+            .results
+            .as_ref()
+            .map_or(0, |results| results.visible.len())
+    })
+}
+
+fn scroll_top(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> usize {
+    app.read_with(cx, |this, _| {
+        this.tab().list_state.logical_scroll_top().item_ix
+    })
+}
+
+#[gpui::test]
+fn going_back_scrolls_the_results_back(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cx) = open(cx);
+    search_files(&app, dir.path(), 60, cx);
+    type_query(&app, "foo", cx);
+    pause(cx);
+    assert_eq!(result_count(&app, cx), 60);
+    app.update(cx, |this, _| {
+        this.tab().list_state.scroll_to(ListOffset {
+            item_ix: 40,
+            offset_in_item: px(0.),
+        })
+    });
+
+    type_query(&app, "fo", cx);
+    pause(cx);
+    assert_eq!(scroll_top(&app, cx), 0);
+    back(&app, cx);
+    assert_eq!(
+        (pattern(&app, cx), scroll_top(&app, cx)),
+        ("foo".into(), 40)
+    );
+    forward(&app, cx);
+    assert_eq!((pattern(&app, cx), scroll_top(&app, cx)), ("fo".into(), 0));
 }
