@@ -218,7 +218,8 @@ facet narrows them to Rust, and the table lays them out one row per line.
   it, makes sure the new program starts, and puts it in place of the running one;
   Restart Now brings the same windows back in the new version. Help > Check for
   Updates… asks at once, Skip This Version stops offering one release, and Help >
-  Check for Updates Automatically turns the daily question off.
+  Check for Updates Automatically (or `dowse settings set updates.check false`)
+  turns the daily question off.
 - **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works), or the
   `⋮` menu at the right of the title bar, lists every command with its shortcut,
   plus the open tabs, the scope's tags, recent
@@ -299,7 +300,8 @@ Settings live under the user configuration directory (`%APPDATA%\dowse` on
 Windows, `~/.config/dowse` on Linux, `~/Library/Application Support/dowse`
 on macOS): `library.json` holds every repository's name, tags and settings,
 `settings.json` the app's settings (`dowse settings` lists them), `session.json` the
-windows to restore and recent workspaces, `workspaces/` is where workspaces are
+windows to restore and recent workspaces, `update.json` what the last look for
+updates found, `workspaces/` is where workspaces are
 saved unless you pick elsewhere, and `logs/dowse.log` is the log (it starts over
 past 5 MB, keeping the previous one as `dowse.old.log`; `DOWSE_LOG=debug` records
 more). Set `DOWSE_CONFIG_DIR` to keep settings elsewhere.
@@ -317,7 +319,7 @@ more). Set `DOWSE_CONFIG_DIR` to keep settings elsewhere.
 | `dowse repos pull [<repo>...] [--wait]` | Pulls repositories, or those in scope (`--here`, `-t`, `-W`). |
 | `dowse repos sync <repo>... --every <interval>` | Pulls them every `15m`, `1h`, `3d`...; `--off` stops. |
 | `dowse repos index-location <repo>... [--repo\|--external\|--default]` | Shows where repositories keep their indexes, or keeps them in their `.tgrep`, outside them, or where `index.location` says, moving them. `-q` prints only the folders: `tgrep search foo --index-path "$(dowse repos index-location api -q)"`. |
-| `dowse settings [set <key> <value>\|unset <key>]` | Shows the app's settings, or changes them: `index.location` (`repo` or `external`) and `index.external-dir`. |
+| `dowse settings [set <key> <value>\|unset <key>]` | Shows the app's settings, or changes them: `index.location` (`repo` or `external`), `index.external-dir`, and `updates.check` (`true` or `false`, whether the app looks for a new release once a day). |
 | `dowse tasks [--wait]` | Lists the background clones and pulls; `dowse tasks cancel <id>...` or `--all` cancels them. |
 | `dowse index [--wait] [--full]` | Brings the indexes in scope up to date, reading only the files that changed; `--full` builds them again from every file. |
 | `dowse status` | Shows the running app: windows, repositories, indexing, where its settings and log are. |
