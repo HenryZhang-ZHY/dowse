@@ -6,6 +6,7 @@
 
 use std::io::{self, BufRead as _, BufReader, Write as _};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream, prelude::*,
@@ -57,6 +58,28 @@ fn claim_named(id: &str, command: &Command) -> Launch {
     // Without a socket, run on our own rather than not at all.
     let (_, incoming) = async_channel::unbounded();
     Launch::Primary(incoming)
+}
+
+/// Wait until no app runs with the settings in `config_root`, for at most
+/// `timeout`, as an app started to take over from one that is quitting
+/// must: were it to claim the socket first, it would hand its command to
+/// the app on its way out. Returns whether that app is gone.
+pub fn wait_until_gone(config_root: &Path, timeout: Duration) -> bool {
+    wait_until_named_gone(&socket_id(config_root), timeout)
+}
+
+fn wait_until_named_gone(id: &str, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        // The app reads nothing from the connection, and lets it go.
+        if Connection::open(id).is_err() {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Send `command` to the running app and wait until it has it.
@@ -326,6 +349,18 @@ mod tests {
                 Frame::Done
             ]
         );
+    }
+
+    #[test]
+    fn waits_for_the_running_app_to_go() {
+        let id = test_socket("gone");
+        assert!(wait_until_named_gone(&id, Duration::ZERO));
+        let Launch::Primary(_incoming) = claim_named(&id, &Command::Start) else {
+            panic!("the first launch should run the app");
+        };
+        let started = Instant::now();
+        assert!(!wait_until_named_gone(&id, Duration::from_millis(300)));
+        assert!(started.elapsed() >= Duration::from_millis(300));
     }
 
     #[test]

@@ -67,6 +67,27 @@ pub enum Command {
 /// The flag behind [`Command::Background`].
 pub const BACKGROUND_FLAG: &str = "--background";
 
+/// Set on an app started to take over from one that is quitting to finish
+/// an update. It waits for that one to go before it starts, so it does not
+/// hand its command to the app on its way out.
+pub const TAKE_OVER_ENV: &str = "DOWSE_TAKE_OVER";
+
+/// Start `program` to take over once this app quits: with the windows the
+/// session remembers, or without windows (`background`) when this app has
+/// none open.
+pub fn start_taking_over(program: &Path, background: bool) -> std::io::Result<()> {
+    let mut command = std::process::Command::new(program);
+    command
+        .env(TAKE_OVER_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if background {
+        command.arg(BACKGROUND_FLAG);
+    }
+    command.spawn().map(drop)
+}
+
 /// Parse the arguments after the program name, resolving relative paths
 /// against `cwd`.
 pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Command, String> {

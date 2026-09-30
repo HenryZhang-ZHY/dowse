@@ -35,6 +35,12 @@ fn main() {
     };
 
     let config_root = dowse::engine::config::default_root();
+    if std::env::var_os(launch::TAKE_OVER_ENV).is_some() {
+        // SAFETY: no other thread runs yet. The programs this one starts
+        // are not taking over.
+        unsafe { std::env::remove_var(launch::TAKE_OVER_ENV) };
+        ipc::wait_until_gone(&config_root, std::time::Duration::from_secs(30));
+    }
     let commands = match ipc::claim(&config_root, &command) {
         Launch::Forwarded => return,
         Launch::Primary(commands) => commands,
