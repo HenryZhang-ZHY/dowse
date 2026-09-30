@@ -71,10 +71,12 @@ impl UpdateState {
     /// A clock set back counts as due, rather than waiting until it catches up.
     pub fn is_due(&self, now: SystemTime) -> bool {
         self.automatic
-            && self.checked_at().is_none_or(|at| match now.duration_since(at) {
-                Ok(since) => since >= CHECK_EVERY,
-                Err(_) => true,
-            })
+            && self
+                .checked_at()
+                .is_none_or(|at| match now.duration_since(at) {
+                    Ok(since) => since >= CHECK_EVERY,
+                    Err(_) => true,
+                })
     }
 
     /// Note GitHub's answer at `now`. `None` for the release means it was

@@ -196,7 +196,10 @@ pub fn current_platform() -> Option<&'static str> {
 /// Fail unless `release` is newer than `current`.
 pub fn ensure_newer(release: &Release, current: &Version) -> Result<()> {
     if release.version <= *current {
-        bail!("dowse {current} is up to date (the latest release is {})", release.version);
+        bail!(
+            "dowse {current} is up to date (the latest release is {})",
+            release.version
+        );
     }
     Ok(())
 }
@@ -283,8 +286,14 @@ mod tests {
         assert_eq!(
             parse_checksums(&text),
             vec![
-                (HASH.to_string(), "dowse-v1.1.1-windows-x86_64.zip".to_string()),
-                (HASH.to_string(), "dowse-v1.1.1-macos-universal.zip".to_string()),
+                (
+                    HASH.to_string(),
+                    "dowse-v1.1.1-windows-x86_64.zip".to_string()
+                ),
+                (
+                    HASH.to_string(),
+                    "dowse-v1.1.1-macos-universal.zip".to_string()
+                ),
             ]
         );
     }

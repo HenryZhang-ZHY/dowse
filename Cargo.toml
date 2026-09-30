@@ -33,6 +33,7 @@ regex = "1"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cmake = "0.7"
 tree-sitter-swift = "0.7"
+ureq = { version = "3", features = ["platform-verifier", "win-system-proxy"] }
 tgrep-core ={ git = "https://github.com/microsoft/tgrep", rev = "69e4fd05674403baf3e482a597cb2d24fbedc581" }
 which = "7"
 dirs = "6"
