@@ -22,6 +22,7 @@ use crate::format;
 use dowse::engine::github::{self, CloneMode, ListProgress, RemoteFilter, RemoteRepo};
 use dowse::engine::repo;
 use dowse::engine::session::CloneDefaults;
+use dowse::engine::settings::{IndexLocation, IndexSettings};
 use dowse::engine::sync::Interval;
 use dowse::engine::tasks::{TaskKind, TaskState};
 
@@ -439,6 +440,73 @@ impl SearchApp {
                 cx,
             );
         }
+    }
+
+    /// Keep the repositories' indexes at `location`, or where the app's
+    /// setting says with `None`; those that change place move.
+    pub(super) fn set_index_location(
+        &mut self,
+        ids: &[String],
+        location: Option<IndexLocation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .hub
+            .update(cx, |hub, cx| hub.set_index_location(ids, location, cx));
+        if let Err(error) = result {
+            window.push_notification(
+                Notification::error(format!("Could not save repositories: {error:#}")),
+                cx,
+            );
+        }
+    }
+
+    /// Change where indexes are kept; those that change place move.
+    pub(super) fn set_index_settings(
+        &mut self,
+        settings: IndexSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .hub
+            .update(cx, |hub, cx| hub.set_index_settings(settings, cx));
+        if let Err(error) = result {
+            window.push_notification(
+                Notification::error(format!("Could not save the settings: {error:#}")),
+                cx,
+            );
+        }
+    }
+
+    /// Pick the folder external indexes go under.
+    pub(super) fn browse_external_index_dir(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Keep Indexes Here".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                let mut settings = this.hub.read(cx).index_settings().clone();
+                settings.external_dir = Some(path);
+                this.set_index_settings(settings, window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Add the tags in `text` to the selected repositories; `-tag` removes one.

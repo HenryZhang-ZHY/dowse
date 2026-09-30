@@ -29,6 +29,8 @@ use super::render::tag_label;
 use super::tasks::TaskHub;
 use crate::format;
 use dowse::engine::github::{self, CloneMode, RemoteRepo};
+use dowse::engine::index::display_path;
+use dowse::engine::settings::IndexLocation;
 use dowse::engine::sync::Interval;
 use dowse::engine::tasks::{TaskInfo, TaskKind, TaskState};
 
@@ -400,6 +402,28 @@ impl SearchApp {
                             })
                         }),
                 )
+                .child({
+                    let app = cx.entity().downgrade();
+                    let default = self.hub.read(cx).index_settings().location();
+                    Button::new("bulk-index-location")
+                        .ghost()
+                        .xsmall()
+                        .icon(Lucide::HardDrive)
+                        .label("Index Location")
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |menu, _, _| {
+                            location_menu(menu, None, default, {
+                                let app = app.clone();
+                                move |location, window, cx| {
+                                    app.update(cx, |this, cx| {
+                                        let ids = this.selected_ids();
+                                        this.set_index_location(&ids, location, window, cx)
+                                    })
+                                    .ok();
+                                }
+                            })
+                        })
+                })
                 .child(
                     div().ml_2().w(px(260.)).child(
                         Input::new(&self.manager.bulk_tags)
@@ -467,8 +491,9 @@ impl SearchApp {
                     .px_6()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Click a repository for its tags and pull settings. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept."),
+                    .child("Click a repository for its tags, pull settings and where its index is kept. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept."),
             )
+            .child(self.render_index_settings(cx))
             .children(self.render_explorer_integration(cx))
     }
 
@@ -718,7 +743,7 @@ impl SearchApp {
         )
     }
 
-    /// A repository's tags and pull settings, below its row.
+    /// A repository's tags, pull settings and index location, below its row.
     fn render_repository_details(
         &self,
         repo: &RepoView,
@@ -786,6 +811,179 @@ impl SearchApp {
                         "Fetches origin, then fast-forwards the default branch when it is checked out, has no uncommitted changes and no commits of its own. Otherwise it only fetches, and says why."
                     } else {
                         "Only git repositories can be pulled."
+                    })),
+            )
+            .child(self.render_index_location(repo, cx))
+    }
+
+    /// Where a repository's index is kept, to change, and its folder.
+    fn render_index_location(&self, repo: &RepoView, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let id = repo.info.id.clone();
+        let hub = self.hub.read(cx);
+        let own = hub.own_index_location(&id);
+        let default = hub.index_settings().location();
+        let app = cx.entity().downgrade();
+        let index_dir = repo.index_dir.as_deref().map(display_path);
+        let external = own.unwrap_or(default) == IndexLocation::External;
+
+        h_flex()
+            .gap_3()
+            .items_start()
+            .child(
+                div()
+                    .w(px(110.))
+                    .flex_none()
+                    .pt_1()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Index"),
+            )
+            .child(
+                Button::new(SharedString::from(format!("index-location:{id}")))
+                    .outline()
+                    .small()
+                    .icon(Lucide::HardDrive)
+                    .label(match own {
+                        Some(location) => location_label(location).to_string(),
+                        None => format!("{} (default)", location_label(default)),
+                    })
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |menu, _, _| {
+                        let (app, id) = (app.clone(), id.clone());
+                        location_menu(menu, Some(own), default, move |location, window, cx| {
+                            app.update(cx, |this, cx| {
+                                this.set_index_location(
+                                    std::slice::from_ref(&id),
+                                    location,
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .ok();
+                        })
+                    }),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(if external {
+                        "Kept outside the repository, where cleaning it cannot delete the index. The tgrep command line finds it with --index-path."
+                    } else {
+                        "Kept in the repository's .tgrep, where the tgrep command line finds it. Cleaning ignored files deletes it, and dowse builds it again."
+                    })
+                    .children(index_dir.map(|dir| {
+                        let option = format!("--index-path \"{dir}\"");
+                        h_flex()
+                            .gap_1()
+                            .child(div().min_w_0().truncate().child(dir))
+                            .when(external, |row| {
+                                row.child(
+                                    Button::new(SharedString::from(format!(
+                                        "copy-index-path:{}",
+                                        repo.info.id
+                                    )))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Lucide::Copy)
+                                    .tooltip("Copy tgrep's --index-path option for this index")
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            option.clone(),
+                                        ))
+                                    }),
+                                )
+                            })
+                    }))
+                    .children(
+                        repo.note
+                            .clone()
+                            .map(|note| div().text_color(theme.warning).child(note)),
+                    ),
+            )
+    }
+
+    /// Where indexes are kept unless a repository says otherwise, and the
+    /// folder those kept outside go under.
+    fn render_index_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let settings = self.hub.read(cx).index_settings().clone();
+        let location = settings.location();
+        let app = cx.entity().downgrade();
+        h_flex()
+            .mx_6()
+            .gap_4()
+            .p_3()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(theme.radius_lg)
+            .child(Icon::new(Lucide::HardDrive).text_color(muted))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_sm().font_semibold().child("Indexes"))
+                    .child(div().text_xs().text_color(muted).child(
+                        "Where repositories keep their indexes unless they say otherwise: in the repository's .tgrep, shared with the tgrep command line, or outside it, where cleaning ignored files cannot delete them. Indexes that change place are moved.",
+                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .truncate()
+                            .child(format!(
+                                "Outside the repository means under {}",
+                                display_path(&settings.external_dir())
+                            )),
+                    ),
+            )
+            .child(
+                Button::new("default-index-location")
+                    .outline()
+                    .small()
+                    .label(location_label(location))
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |menu, _, _| {
+                        let app = app.clone();
+                        let settings = settings.clone();
+                        [IndexLocation::Repo, IndexLocation::External]
+                            .into_iter()
+                            .fold(menu, |menu, choice| {
+                                let (app, settings) = (app.clone(), settings.clone());
+                                menu.item(
+                                    PopupMenuItem::new(location_label(choice))
+                                        .checked(choice == location)
+                                        .on_click(move |_, window, cx| {
+                                            let mut settings = settings.clone();
+                                            settings.location = match choice {
+                                                IndexLocation::Repo => None,
+                                                IndexLocation::External => Some(choice),
+                                            };
+                                            app.update(cx, |this, cx| {
+                                                this.set_index_settings(settings, window, cx)
+                                            })
+                                            .ok();
+                                        }),
+                                )
+                            })
+                    }),
+            )
+            .child(
+                Button::new("external-index-dir")
+                    .ghost()
+                    .small()
+                    .icon(Lucide::FolderOpen)
+                    .label("Change Folder…")
+                    .tooltip("Choose the folder indexes kept outside repositories go under")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.browse_external_index_dir(window, cx)
                     })),
             )
     }
@@ -1854,6 +2052,42 @@ fn select_all_box(
                 })
                 .on_click(on_click)
         })
+}
+
+fn location_label(location: IndexLocation) -> &'static str {
+    match location {
+        IndexLocation::Repo => "In the repository (.tgrep)",
+        IndexLocation::External => "Outside the repository",
+    }
+}
+
+/// Fill `menu` with the index locations, calling `choose` with the one
+/// picked: `None` for the app's `default`. `current` ticks the choice in use,
+/// when there is one to show.
+fn location_menu(
+    mut menu: gpui_kit::component::menu::PopupMenu,
+    current: Option<Option<IndexLocation>>,
+    default: IndexLocation,
+    choose: impl Fn(Option<IndexLocation>, &mut Window, &mut App) + 'static,
+) -> gpui_kit::component::menu::PopupMenu {
+    let choose = std::rc::Rc::new(choose);
+    let follow = choose.clone();
+    menu = menu
+        .item(
+            PopupMenuItem::new(format!("Default: {}", location_label(default)))
+                .checked(current == Some(None))
+                .on_click(move |_, window, cx| follow(None, window, cx)),
+        )
+        .separator();
+    for location in [IndexLocation::Repo, IndexLocation::External] {
+        let choose = choose.clone();
+        menu = menu.item(
+            PopupMenuItem::new(location_label(location))
+                .checked(current == Some(Some(location)))
+                .on_click(move |_, window, cx| choose(Some(location), window, cx)),
+        );
+    }
+    menu
 }
 
 /// Fill `menu` with the pull intervals, calling `choose` with the one picked.
