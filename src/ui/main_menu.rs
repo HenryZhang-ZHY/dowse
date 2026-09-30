@@ -313,7 +313,7 @@ impl SearchApp {
         };
         let state = ViewState {
             can_go_back: self.can_go_back(),
-            can_go_forward: tab.history.can_go_forward(),
+            can_go_forward: self.can_go_forward(),
             sidebar_open: self.sidebar_open,
             preview_open: tab.preview_open,
             table: tab.view == ResultsView::Table,

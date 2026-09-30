@@ -16,7 +16,6 @@ use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::*;
 
 use super::highlight::{self, Highlighters, LineStyles};
-use super::history::History;
 use super::hub::{IndexJob, RepoHub};
 use super::manager::Manager;
 use super::repos::TagInputs;
@@ -163,9 +162,9 @@ impl SearchApp {
             tab.facet_filter = FacetFilter::default();
             tab.set_results(None);
             tab.preview = None;
-            tab.history = History::default();
             tab.stale = true;
         }
+        self.forget_history(cx);
         cx.notify();
     }
 
@@ -190,7 +189,15 @@ impl SearchApp {
         }
     }
 
+    /// Go to `page`, a step of the current tab's history as following a link
+    /// is.
     pub(super) fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.note_page(page, cx);
+        self.set_page(page, window, cx);
+    }
+
+    /// Show `page`, as Back and Forward do, without making it a step.
+    pub(super) fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if page == Page::Repositories && self.page != page {
             self.manager.forget_disk_state();
         }
@@ -473,7 +480,7 @@ impl SearchApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.page = Page::Search;
+        self.show_search(window, cx);
         self.path_filter_open = true;
         self.tab()
             .path_input

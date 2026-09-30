@@ -37,7 +37,7 @@ facet narrows them to Rust, and the table lays them out one row per line.
   their indexes, add or remove tags (`-tag` removes one), set how often they are
   pulled, or take them out of the workspace. A row opens to its tags and pull
   settings, and shows its index and how its last pull went. Back (`Alt+Left`)
-  returns to the search.
+  returns to the search, and Forward comes back to the page.
 
   ![The repositories page: cloned repositories with their branch, owner and mirror tags, and how many files each index holds](docs/images/repositories-page.webp)
 - **Clone from GitHub, many at once.** The page's GitHub section lists an owner's
@@ -132,7 +132,8 @@ facet narrows them to Rust, and the table lays them out one row per line.
   `Ctrl+Shift+Tab` (or `Ctrl+PageDown/PageUp`) step through them, and a middle click
   closes one. Each tab has its own query, options, path filter and facet filters; the
   scope is the window's. Tabs come back with their window on the next start.
-- **Back and forward** through a tab's searches, as in a browser: the arrows at the
+- **Back and forward** through a tab's searches and visits to the repositories
+  page, as in a browser: the arrows at the
   left of the title bar, `Alt+Left` and `Alt+Right` (`Ctrl+-` and `Ctrl+Shift+-` on
   macOS), or a mouse's back and forward buttons. Going back brings the search back
   with its filters and the file it was previewing. A search counts as a step once

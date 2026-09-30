@@ -193,24 +193,19 @@ impl SearchApp {
                 "Show the filters (Ctrl+B)"
             })
             .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
-        let history = &self.tab().history;
         let back_button = Button::new("go-back")
             .ghost()
             .small()
             .icon(IconName::ArrowLeft)
             .disabled(!self.can_go_back())
-            .tooltip(if self.page == Page::Repositories {
-                "Back to the search (Alt+Left)"
-            } else {
-                "Back to the previous search (Alt+Left)"
-            })
+            .tooltip(self.back_tooltip())
             .on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx)));
         let forward_button = Button::new("go-forward")
             .ghost()
             .small()
             .icon(IconName::ArrowRight)
-            .disabled(!history.can_go_forward())
-            .tooltip("Forward to the next search (Alt+Right)")
+            .disabled(!self.can_go_forward())
+            .tooltip(self.forward_tooltip())
             .on_click(cx.listener(|this, _, window, cx| this.go_forward(window, cx)));
 
         let preview_open = self.tab().preview_open;

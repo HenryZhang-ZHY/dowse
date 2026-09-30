@@ -11,7 +11,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 use regex::Regex;
 
-use super::app::{SearchApp, SnippetSyntax};
+use super::app::{Page, SearchApp, SnippetSyntax};
 use super::history::History;
 use super::preview::Preview;
 use super::table::{ResultsView, TableView};
@@ -221,7 +221,8 @@ impl SearchApp {
             search_input.update(cx, |input, cx| input.set_value("", window, cx));
             path_input.update(cx, |input, cx| input.set_value("", window, cx));
             self.run_search(false, cx);
-            self.show_search(window, cx);
+            // A fresh start: nothing to go back to.
+            self.set_page(Page::Search, window, cx);
             return;
         }
         let mut tab = self.tabs.remove(index);
@@ -245,11 +246,16 @@ impl SearchApp {
         if index >= self.tabs.len() {
             return;
         }
+        if index != self.active_tab {
+            // The repositories page shows no tabs: this tab goes back to its
+            // search first, a step it can come back from.
+            self.show_search(window, cx);
+        }
         self.active_tab = index;
         if self.tab().stale {
             self.run_search(false, cx);
         }
-        self.show_search(window, cx);
+        self.set_page(Page::Search, window, cx);
         Windows::save(cx);
     }
 

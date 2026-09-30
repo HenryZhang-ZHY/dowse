@@ -490,7 +490,7 @@ impl SearchApp {
                 .keywords(&["previous search", "history"]),
             );
         }
-        if tab.history.can_go_forward() {
+        if self.can_go_forward() {
             commands.push(
                 command("View", "Forward", IconName::ArrowRight, |this, w, cx| {
                     this.go_forward(w, cx)

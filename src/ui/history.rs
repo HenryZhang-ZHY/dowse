@@ -1,9 +1,11 @@
-//! Back and Forward: each tab remembers the searches it showed, with their
-//! filters and the file being previewed, as a browser remembers pages.
+//! Back and Forward: each tab remembers what it showed, as a browser tab
+//! remembers pages: its searches, with their filters and the file being
+//! previewed, and the repositories page.
 //! Typing changes the search being shown; it becomes a step of its own once
 //! it settles: after a pause, on Enter, or once a result is previewed or
-//! filtered. A different query after that starts the next step. From the
-//! repositories page, Back returns to the search.
+//! filtered. A different query after that starts the next step. Going to the
+//! repositories page and leaving it, other than by Back or Forward, is a step
+//! too. That page shows no tabs, so switching tabs leaves it for the search.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +24,12 @@ use dowse::engine::repo::RepoInfo;
 const SETTLE_AFTER: Duration = Duration::from_millis(1000);
 /// Steps kept each way.
 const MAX_STEPS: usize = 100;
+
+/// Something a tab showed, to go back or forward to.
+enum Entry {
+    Search(Visit),
+    Repositories,
+}
 
 /// One search as a tab showed it.
 struct Visit {
@@ -61,8 +69,8 @@ impl Visit {
 
 #[derive(Default)]
 pub(super) struct History {
-    back: Vec<Visit>,
-    forward: Vec<Visit>,
+    back: Vec<Entry>,
+    forward: Vec<Entry>,
     /// The query shown, once it has settled.
     settled: Option<SearchQuery>,
     settle_task: Option<Task<()>>,
@@ -78,16 +86,66 @@ impl History {
     }
 }
 
-fn push(steps: &mut Vec<Visit>, visit: Visit) {
+fn push(steps: &mut Vec<Entry>, entry: Entry) {
     if steps.len() == MAX_STEPS {
         steps.remove(0);
     }
-    steps.push(visit);
+    steps.push(entry);
 }
 
 impl SearchApp {
     pub(super) fn can_go_back(&self) -> bool {
-        self.page == Page::Repositories || self.tab().history.can_go_back()
+        self.tab().history.can_go_back()
+    }
+
+    pub(super) fn can_go_forward(&self) -> bool {
+        self.tab().history.can_go_forward()
+    }
+
+    pub(super) fn back_tooltip(&self) -> &'static str {
+        match self.tab().history.back.last() {
+            Some(Entry::Repositories) => "Back to the repositories (Alt+Left)",
+            _ => "Back to the previous search (Alt+Left)",
+        }
+    }
+
+    pub(super) fn forward_tooltip(&self) -> &'static str {
+        match self.tab().history.forward.last() {
+            Some(Entry::Repositories) => "Forward to the repositories (Alt+Right)",
+            _ => "Forward to the next search (Alt+Right)",
+        }
+    }
+
+    /// What the current tab shows, as a step to come back to.
+    fn here(&self, cx: &App) -> Entry {
+        match self.page {
+            Page::Repositories => Entry::Repositories,
+            Page::Search => Entry::Search(Visit::of(self.tab(), self.tab().query(cx), cx)),
+        }
+    }
+
+    /// The current tab is about to show `page` instead of another: what it
+    /// shows now becomes the step to go back to.
+    pub(super) fn note_page(&mut self, page: Page, cx: &App) {
+        if page == self.page {
+            return;
+        }
+        let here = self.here(cx);
+        let history = &mut self.tab_mut().history;
+        push(&mut history.back, here);
+        history.forward.clear();
+    }
+
+    /// Forget every tab's steps, as when the workspace changes. Back still
+    /// leaves the repositories page for the search.
+    pub(super) fn forget_history(&mut self, cx: &App) {
+        for tab in &mut self.tabs {
+            tab.history = History::default();
+        }
+        if self.page == Page::Repositories {
+            let visit = Visit::of(self.tab(), self.tab().query(cx), cx);
+            self.tab_mut().history.back.push(Entry::Search(visit));
+        }
     }
 
     /// The current tab is about to search for `query`: when it replaces a
@@ -103,7 +161,7 @@ impl SearchApp {
             let settled = tab.history.settled.take().unwrap_or_default();
             if !settled.is_empty() {
                 let visit = Visit::of(tab, settled, cx);
-                push(&mut tab.history.back, visit);
+                push(&mut tab.history.back, Entry::Search(visit));
                 tab.history.forward.clear();
             }
         }
@@ -148,30 +206,21 @@ impl SearchApp {
     }
 
     fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if back && self.page == Page::Repositories {
-            self.show_search(window, cx);
-            return;
-        }
-        let query = self.tab().query(cx);
-        let tab = self.tab_mut();
-        let target = if back {
-            tab.history.back.pop()
+        let here = self.here(cx);
+        let history = &mut self.tab_mut().history;
+        let (from, to) = if back {
+            (&mut history.back, &mut history.forward)
         } else {
-            tab.history.forward.pop()
+            (&mut history.forward, &mut history.back)
         };
-        let Some(target) = target else {
+        let Some(target) = from.pop() else {
             return;
         };
-        if !query.is_empty() {
-            let here = Visit::of(tab, query, cx);
-            let other = if back {
-                &mut tab.history.forward
-            } else {
-                &mut tab.history.back
-            };
-            push(other, here);
+        push(to, here);
+        match target {
+            Entry::Search(visit) => self.restore(visit, window, cx),
+            Entry::Repositories => self.set_page(Page::Repositories, window, cx),
         }
-        self.restore(target, window, cx);
     }
 
     /// Show `visit` in the current tab again.
@@ -203,7 +252,7 @@ impl SearchApp {
         }
         self.tab_mut().preview_open = visit.preview_open;
         self.run_search(false, cx);
-        self.show_search(window, cx);
+        self.set_page(Page::Search, window, cx);
     }
 
     pub(super) fn on_go_back(&mut self, _: &GoBack, window: &mut Window, cx: &mut Context<Self>) {
@@ -219,3 +268,6 @@ impl SearchApp {
         self.go_forward(window, cx);
     }
 }
+
+#[cfg(test)]
+mod tests;
