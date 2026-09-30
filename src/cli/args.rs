@@ -57,6 +57,23 @@ Exit status: 0 when something matched, 1 when nothing did, 2 on error."
     Index(IndexArgs),
     /// Show the app's background tasks (clones and pulls), or cancel them.
     Tasks(TasksArgs),
+    /// Show the app's settings, or change them.
+    #[command(after_help = "\
+Settings:
+  index.location      where the indexes of repositories without a location of
+                      their own are kept: repo (the repository's .tgrep, where
+                      the tgrep command line finds it; the default) or external
+                      (outside the repository, where cleaning it cannot delete it)
+  index.external-dir  the folder external indexes go under
+
+Changing where indexes are kept moves them; one that cannot be moved stays
+where it was and is built again in its new place.
+
+Examples:
+  dowse settings set index.location external
+  dowse settings set index.external-dir D:/dowse-indexes
+  dowse settings unset index.location")]
+    Settings(SettingsArgs),
     /// Show what the running app is doing.
     Status(JsonArg),
     /// Quit the running app, closing its windows.
@@ -211,6 +228,33 @@ Examples:
         #[arg(long)]
         wait: bool,
     },
+    /// Show where repositories keep their indexes, or keep them elsewhere:
+    /// in the repository's .tgrep, where the tgrep command line finds them,
+    /// or outside it, where cleaning the repository cannot delete them.
+    /// Indexes that change place are moved.
+    #[command(after_help = "\
+Examples:
+  dowse repos index-location api web --external
+  dowse repos index-location api --default     # as `dowse settings` says
+  tgrep search foo --index-path \"$(dowse repos index-location api -q)\"")]
+    IndexLocation {
+        #[arg(required = true, value_name = "REPO")]
+        repos: Vec<String>,
+        /// Keep them in the repository's .tgrep.
+        #[arg(long, group = "change")]
+        repo: bool,
+        /// Keep them outside the repository, under index.external-dir.
+        #[arg(long, group = "change")]
+        external: bool,
+        /// Keep them where the index.location setting says.
+        #[arg(long, group = "change")]
+        default: bool,
+        /// Print only the index folders, one per line.
+        #[arg(short = 'q', long)]
+        quiet: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Pull repositories on an interval, such as 15m, 1h or 3d, while the
     /// app runs; or stop.
     Sync {
@@ -286,6 +330,22 @@ pub struct CloneArgs {
     /// Wait until the clones finish.
     #[arg(long)]
     pub wait: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SettingsArgs {
+    #[command(subcommand)]
+    pub action: Option<SettingsAction>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SettingsAction {
+    /// Change a setting.
+    Set { key: String, value: String },
+    /// Put a setting back to its default.
+    Unset { key: String },
 }
 
 #[derive(Debug, Args)]

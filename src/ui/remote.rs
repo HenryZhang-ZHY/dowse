@@ -29,12 +29,13 @@ use dowse::engine::query::CompiledQuery;
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::{self, SearchLimits};
 use dowse::engine::session::CloneDefaults;
+use dowse::engine::settings::{IndexLocation, Settings};
 use dowse::engine::sync::Interval;
 use dowse::engine::table::ResultTable;
 use dowse::engine::tasks::TaskState;
 use dowse::ipc::protocol::{
-    AppStatus, Frame, LogsRequest, RepoStatus, Request, RequestEnvelope, ScopeSpec, SearchRequest,
-    SearchResponse,
+    AppStatus, Frame, LocationChange, LogsRequest, RepoStatus, Request, RequestEnvelope, ScopeSpec,
+    SearchRequest, SearchResponse, SettingValue,
 };
 
 /// How long repositories opened for the command line stay open after their
@@ -185,6 +186,8 @@ pub(super) fn handle(envelope: RequestEnvelope, reply: Sender<Frame>, cx: &mut A
             Ok(Vec::new())
         }
         Request::SetPullEvery { repos, every } => set_pull_every(&repos, every, &cwd, cx),
+        Request::IndexLocation { repos, change } => index_location(&repos, change, &cwd, cx),
+        Request::Settings { set, unset } => settings(&set, &unset, cx),
         Request::Tasks { wait } => {
             tasks(wait, reply.clone(), cx);
             Ok(Vec::new())
@@ -243,6 +246,8 @@ fn kind(request: &Request) -> &'static str {
         Request::Clone { .. } => "repos clone",
         Request::Pull { .. } => "repos pull",
         Request::SetPullEvery { .. } => "repos sync",
+        Request::IndexLocation { .. } => "repos index-location",
+        Request::Settings { .. } => "settings",
         Request::Tasks { .. } => "tasks",
         Request::CancelTasks { .. } => "tasks cancel",
         Request::Index { .. } => "index",
@@ -268,6 +273,17 @@ fn describe(request: &Request) -> String {
             repos.join(", "),
             every.map_or("never".to_string(), |every| format!("every {every}"))
         ),
+        Request::IndexLocation { repos, change } => match change {
+            None => format!("where {} keep their indexes", repos.join(", ")),
+            Some(change) => format!("keep the indexes of {} {change:?}", repos.join(", ")),
+        },
+        Request::Settings { set, unset } => {
+            if set.is_empty() && unset.is_empty() {
+                "settings".into()
+            } else {
+                format!("set {set:?}, unset {unset:?}")
+            }
+        }
         Request::Tasks { .. } => "tasks".into(),
         Request::CancelTasks { .. } => "cancel tasks".into(),
         Request::Index { .. } => "index".into(),
@@ -409,9 +425,9 @@ fn repo_status(hub: &RepoHub, info: &RepoInfo) -> RepoStatus {
         None => (None, 0),
     };
     // What the index on disk says, whether or not the app has it open.
-    let on_disk = RepoIndex::open(&info.root)
-        .ok()
-        .map(|index| index.index_status());
+    let place = hub.index_place(&info.id);
+    let on_disk_index = RepoIndex::open_in(&info.root, &place).ok();
+    let on_disk = on_disk_index.as_ref().map(|index| index.index_status());
     let (index, error) = match &activity {
         None if on_disk.is_none() => ("not-found", None),
         None => ("closed", None),
@@ -445,6 +461,8 @@ fn repo_status(hub: &RepoHub, info: &RepoInfo) -> RepoStatus {
         indexed_at_ms,
         changed_files,
         pull_every: info.pull_every,
+        index_location: Some(place.location()),
+        index_dir: on_disk_index.map(|index| index.index_dir().to_path_buf()),
     }
 }
 
@@ -815,6 +833,97 @@ fn set_pull_every(
         ),
         None => format!("no longer pulling {}", repos.join(", ")),
     })])
+}
+
+fn index_location(
+    repos: &[String],
+    change: Option<LocationChange>,
+    cwd: &Path,
+    cx: &mut App,
+) -> Result<Vec<Frame>, String> {
+    let ids: Vec<String> = repos
+        .iter()
+        .map(|repo| resolve(repo, cwd, cx))
+        .collect::<Result<_, _>>()?;
+    let hub = RepoHub::global(cx);
+    let mut frames = Vec::new();
+    if let Some(change) = change {
+        let location = match change {
+            LocationChange::Default => None,
+            LocationChange::To(location) => Some(location),
+        };
+        hub.update(cx, |hub, cx| hub.set_index_location(&ids, location, cx))
+            .map_err(|error| format!("{error:#}"))?;
+        frames.push(Frame::Message(match location {
+            Some(location) => format!(
+                "keeping the indexes of {} {}",
+                repos.join(", "),
+                where_(location)
+            ),
+            None => format!(
+                "keeping the indexes of {} where the index.location setting says",
+                repos.join(", ")
+            ),
+        }));
+    }
+    let hub = hub.read(cx);
+    let statuses = ids
+        .iter()
+        .filter_map(|id| hub.library().get(Path::new(id)))
+        .map(|entry| {
+            repo_status(
+                hub,
+                &RepoInfo {
+                    id: entry.path.to_string_lossy().into_owned(),
+                    name: entry.name.clone(),
+                    root: entry.path.clone(),
+                    branch: repo::current_branch(&entry.path),
+                    tags: entry.tags.clone(),
+                    pull_every: entry.pull_every,
+                },
+            )
+        })
+        .collect();
+    frames.push(Frame::Repos(statuses));
+    Ok(frames)
+}
+
+fn where_(location: IndexLocation) -> &'static str {
+    match location {
+        IndexLocation::Repo => "in their .tgrep",
+        IndexLocation::External => "outside the repositories",
+    }
+}
+
+fn settings(
+    set: &[(String, String)],
+    unset: &[String],
+    cx: &mut App,
+) -> Result<Vec<Frame>, String> {
+    let hub = RepoHub::global(cx);
+    let mut settings = Settings {
+        index: hub.read(cx).index_settings().clone(),
+    };
+    for (key, value) in set {
+        settings.set(key, value)?;
+    }
+    for key in unset {
+        settings.unset(key)?;
+    }
+    hub.update(cx, |hub, cx| {
+        hub.set_index_settings(settings.index.clone(), cx)
+    })
+    .map_err(|error| format!("{error:#}"))?;
+    let values = settings
+        .entries()
+        .into_iter()
+        .map(|(key, value, default)| SettingValue {
+            key: key.into(),
+            value,
+            default,
+        })
+        .collect();
+    Ok(vec![Frame::Settings(values)])
 }
 
 /// The tasks, now or once every one has finished.

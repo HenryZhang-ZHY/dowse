@@ -20,6 +20,7 @@ use crate::engine::library::Library;
 use crate::engine::query::SearchQuery;
 use crate::engine::repo::{self, RepoInfo, Scope};
 use crate::engine::search::{FileMatch, SearchOutcome};
+use crate::engine::settings::IndexLocation;
 use crate::engine::sync::Interval;
 use crate::engine::table::ExportFormat;
 use crate::engine::tasks::TaskInfo;
@@ -28,7 +29,7 @@ use crate::launch::Command;
 
 /// Bumped whenever a message changes shape, so a command line and an app
 /// from different builds notice instead of misreading each other.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Facet values sent per facet: enough to suggest how to narrow a query.
 const FACET_VALUES: usize = 8;
@@ -95,6 +96,17 @@ pub enum Request {
         repos: Vec<String>,
         every: Option<Interval>,
     },
+    /// Where the indexes of repositories, by name or path, are kept; with
+    /// `change`, keep them elsewhere, moving them.
+    IndexLocation {
+        repos: Vec<String>,
+        change: Option<LocationChange>,
+    },
+    /// The app's settings, after setting and unsetting those named.
+    Settings {
+        set: Vec<(String, String)>,
+        unset: Vec<String>,
+    },
     /// The background tasks; with `wait`, once every one has finished.
     Tasks {
         wait: bool,
@@ -112,6 +124,14 @@ pub enum Request {
     OpenDevTools,
     /// Close every window and quit.
     Quit,
+}
+
+/// A new index location for repositories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocationChange {
+    /// Where the app's setting says.
+    Default,
+    To(IndexLocation),
 }
 
 /// Which repositories of the library a request covers. Empty means all.
@@ -161,6 +181,7 @@ pub enum Frame {
     Log(LogEntry),
     Metrics(Box<MetricsSnapshot>),
     Tasks(Vec<TaskInfo>),
+    Settings(Vec<SettingValue>),
     /// Something done, for a person to read.
     Message(String),
     Done,
@@ -391,6 +412,20 @@ pub struct RepoStatus {
     /// How often dowse pulls it, when it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_every: Option<Interval>,
+    /// Where its index is kept, and the folder it is or will be in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_location: Option<IndexLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_dir: Option<PathBuf>,
+}
+
+/// One of the app's settings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingValue {
+    pub key: String,
+    pub value: String,
+    /// Whether the value is the default, not set by the user.
+    pub default: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

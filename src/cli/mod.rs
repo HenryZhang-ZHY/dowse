@@ -17,9 +17,11 @@ use clap::Parser as _;
 
 use crate::engine::github::{RemoteFilter, RemoteRepo};
 use crate::engine::query::SearchQuery;
-use crate::ipc::protocol::{Frame, LogsRequest, Request, SearchRequest};
+use crate::engine::settings::IndexLocation;
+use crate::ipc::protocol::{Frame, LocationChange, LogsRequest, Request, SearchRequest};
 use args::{
-    Cli, CliCommand, CloneArgs, DevAction, GithubArgs, ReposAction, SearchArgs, TasksAction,
+    Cli, CliCommand, CloneArgs, DevAction, GithubArgs, ReposAction, SearchArgs, SettingsAction,
+    TasksAction,
 };
 use output::Style;
 
@@ -161,7 +163,35 @@ fn execute(command: CliCommand) -> io::Result<i32> {
                 repos,
                 every: if off { None } else { every },
             },
+            Some(ReposAction::IndexLocation {
+                repos,
+                repo,
+                external,
+                default,
+                quiet,
+                json,
+            }) => {
+                let change = if repo {
+                    Some(LocationChange::To(IndexLocation::Repo))
+                } else if external {
+                    Some(LocationChange::To(IndexLocation::External))
+                } else if default {
+                    Some(LocationChange::Default)
+                } else {
+                    None
+                };
+                let frames = send(Request::IndexLocation { repos, change })?;
+                return print_index_locations(frames, quiet, json);
+            }
         },
+        CliCommand::Settings(settings) => {
+            let (set, unset) = match settings.action {
+                None => (Vec::new(), Vec::new()),
+                Some(SettingsAction::Set { key, value }) => (vec![(key, value)], Vec::new()),
+                Some(SettingsAction::Unset { key }) => (Vec::new(), vec![key]),
+            };
+            return print_frames(send(Request::Settings { set, unset })?, settings.json);
+        }
         CliCommand::Tasks(tasks) => match tasks.action {
             None => {
                 return print_frames(send(Request::Tasks { wait: tasks.wait })?, tasks.json);
@@ -216,6 +246,35 @@ fn send(request: Request) -> io::Result<crate::ipc::Frames> {
     client::connect_or_start()?.request(request, &current_dir())
 }
 
+/// Print where repositories keep their indexes: a table, only the folders
+/// with `quiet`, or JSON with `json`.
+fn print_index_locations(frames: crate::ipc::Frames, quiet: bool, json: bool) -> io::Result<i32> {
+    let mut stdout = io::stdout().lock();
+    for frame in frames {
+        match frame? {
+            Frame::Repos(repos) if json => writeln!(stdout, "{}", to_json(&repos))?,
+            Frame::Repos(repos) if quiet => {
+                for repo in &repos {
+                    if let Some(dir) = &repo.index_dir {
+                        writeln!(stdout, "{}", crate::engine::index::display_path(dir))?;
+                    }
+                }
+            }
+            Frame::Repos(repos) => {
+                stdout.write_all(output::index_locations_text(&repos).as_bytes())?
+            }
+            Frame::Message(message) => eprintln!("{message}"),
+            Frame::Error(error) => {
+                eprintln!("dowse: {error}");
+                return Ok(FAILED);
+            }
+            Frame::Done => return Ok(FOUND),
+            _ => {}
+        }
+    }
+    Ok(FAILED)
+}
+
 /// Print every frame of an answer as text, or as JSON with `json`.
 fn print_frames(frames: crate::ipc::Frames, json: bool) -> io::Result<i32> {
     let style = style();
@@ -255,6 +314,10 @@ fn print_frames(frames: crate::ipc::Frames, json: bool) -> io::Result<i32> {
                 if tasks.is_empty() {
                     eprintln!("no tasks");
                 }
+            }
+            Frame::Settings(settings) if json => writeln!(stdout, "{}", to_json(&settings))?,
+            Frame::Settings(settings) => {
+                stdout.write_all(output::settings_text(&settings).as_bytes())?
             }
             Frame::Search(_) => {}
         }

@@ -10,8 +10,12 @@ use serde::Serialize;
 use crate::diagnostics::log::{LogEntry, format_time};
 use crate::diagnostics::metrics::{MetricsSnapshot, TimingSummary};
 use crate::engine::github::RemoteRepo;
+use crate::engine::index::display_path;
+use crate::engine::settings::IndexLocation;
 use crate::engine::tasks::{TaskInfo, TaskKind, TaskState};
-use crate::ipc::protocol::{AppStatus, FacetCounts, FileHit, RepoStatus, SearchResponse};
+use crate::ipc::protocol::{
+    AppStatus, FacetCounts, FileHit, RepoStatus, SearchResponse, SettingValue,
+};
 
 /// Whether to colour text for a terminal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -276,6 +280,61 @@ pub fn qualifier(name: &str, value: &str) -> String {
 
 // ----- repositories, status and logs --------------------------------------------
 
+/// One repository per line: name, where its index is kept and its folder.
+pub fn index_locations_text(repos: &[RepoStatus]) -> String {
+    let rows: Vec<[String; 3]> = repos
+        .iter()
+        .map(|repo| {
+            [
+                repo.name.clone(),
+                repo.index_location
+                    .map_or_else(|| "-".into(), |location| location.to_string()),
+                repo.index_dir
+                    .as_deref()
+                    .map_or_else(|| "-".into(), display_path),
+            ]
+        })
+        .collect();
+    let header = ["NAME", "LOCATION", "INDEX FOLDER"].map(String::from);
+    let mut widths = header.clone().map(|cell| cell.chars().count());
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let mut out = String::new();
+    for row in std::iter::once(&header).chain(&rows) {
+        let _ = writeln!(
+            out,
+            "{:w0$}  {:w1$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            w0 = widths[0],
+            w1 = widths[1]
+        );
+    }
+    out
+}
+
+/// One setting per line, `key = value`, marking the defaults.
+pub fn settings_text(settings: &[SettingValue]) -> String {
+    let width = settings
+        .iter()
+        .map(|setting| setting.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for setting in settings {
+        let _ = write!(out, "{:width$} = {}", setting.key, setting.value);
+        if setting.default {
+            out.push_str("  (default)");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// One repository per line: name, branch, index state, files, when indexed,
 /// tags and path.
 pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
@@ -283,6 +342,9 @@ pub fn repos_text(repos: &[RepoStatus], now_ms: u64) -> String {
         .iter()
         .map(|repo| {
             let mut index = repo.index.clone();
+            if repo.index_location == Some(IndexLocation::External) {
+                index.push_str(" external");
+            }
             if repo.changed_files > 0 {
                 let _ = write!(index, " +{} changed", repo.changed_files);
             }
@@ -953,6 +1015,49 @@ mod tests {
     }
 
     #[test]
+    fn index_locations_and_settings_line_up() {
+        let status = |name: &str, location, dir: &str| RepoStatus {
+            name: name.into(),
+            path: PathBuf::from("/src").join(name),
+            branch: None,
+            tags: vec![],
+            index: "ready".into(),
+            error: None,
+            files: None,
+            indexed_at_ms: None,
+            changed_files: 0,
+            pull_every: None,
+            index_location: Some(location),
+            index_dir: Some(PathBuf::from(dir)),
+        };
+        let text = index_locations_text(&[
+            status("api", IndexLocation::Repo, "/src/api/.tgrep"),
+            status("billing", IndexLocation::External, "/idx/billing-0123"),
+        ]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "NAME     LOCATION  INDEX FOLDER");
+        assert_eq!(lines[1], "api      repo      /src/api/.tgrep");
+        assert_eq!(lines[2], "billing  external  /idx/billing-0123");
+
+        let text = settings_text(&[
+            SettingValue {
+                key: "index.location".into(),
+                value: "repo".into(),
+                default: true,
+            },
+            SettingValue {
+                key: "index.external-dir".into(),
+                value: "/idx".into(),
+                default: false,
+            },
+        ]);
+        assert_eq!(
+            text,
+            "index.location     = repo  (default)\nindex.external-dir = /idx\n"
+        );
+    }
+
+    #[test]
     fn repositories_line_up_in_columns() {
         let repos = vec![RepoStatus {
             name: "api".into(),
@@ -965,6 +1070,8 @@ mod tests {
             indexed_at_ms: Some(1_000),
             changed_files: 3,
             pull_every: "1h".parse().ok(),
+            index_location: Some(IndexLocation::Repo),
+            index_dir: Some(PathBuf::from("/src/api/.tgrep")),
         }];
         let text = repos_text(&repos, 121_000);
         let lines: Vec<&str> = text.lines().collect();

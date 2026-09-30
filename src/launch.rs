@@ -37,6 +37,7 @@ Commands (`dowse <COMMAND> --help` tells more):
   repos    List the repositories dowse knows, add, clone, pull and tag them
   index    Bring the indexes of repositories up to date
   tasks    Show the app's background tasks (clones and pulls), or cancel them
+  settings Show the app's settings, such as where indexes are kept, or change them
   status   Show what the running app is doing
   quit     Quit the running app, closing its windows
   dev      The running app's logs and metrics
