@@ -40,7 +40,7 @@ struct PreviewSpot {
 
 impl Visit {
     /// `tab` as it is now, for `query`.
-    fn of(tab: &SearchTab, query: SearchQuery) -> Self {
+    fn of(tab: &SearchTab, query: SearchQuery, cx: &App) -> Self {
         Self {
             query,
             facet_filter: tab.facet_filter.clone(),
@@ -48,7 +48,7 @@ impl Visit {
                 repo: preview.repo.clone(),
                 path: preview.path.clone(),
                 language: preview.language,
-                line: preview.line,
+                line: preview.current_line(cx),
             }),
             preview_open: tab.preview_open,
         }
@@ -98,7 +98,7 @@ impl SearchApp {
         {
             let settled = tab.history.settled.take().unwrap_or_default();
             if !settled.is_empty() {
-                let visit = Visit::of(tab, settled);
+                let visit = Visit::of(tab, settled, cx);
                 push(&mut tab.history.back, visit);
                 tab.history.forward.clear();
             }
@@ -159,7 +159,7 @@ impl SearchApp {
             return;
         };
         if !query.is_empty() {
-            let here = Visit::of(tab, query);
+            let here = Visit::of(tab, query, cx);
             let other = if back {
                 &mut tab.history.forward
             } else {

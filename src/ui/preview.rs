@@ -1,15 +1,14 @@
 //! The preview pane: clicking a result shows its whole file beside the
 //! results, coloured by language and scrolled to the line, without waiting
 //! for an editor to start. From there the file opens in the editor at the
-//! chosen line. Each tab has its own preview, and its pane can be hidden
+//! cursor's line. Each tab has its own preview, and its pane can be hidden
 //! and shown again from the title bar.
 
-use std::ops::Range;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::scroll::{ScrollableElement as _, ScrollbarAxis};
+use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex,
@@ -19,38 +18,39 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::app::{SearchApp, full_path};
-use super::highlight::{self, LineStyles};
-use super::render::{centered_message, code_text};
+use super::highlight;
+use super::render::{centered_message, match_style};
 use super::{ClosePreview, NextMatch, PreviousMatch, TogglePreview};
 use crate::format;
 use dowse::engine::preview::{self, FilePreview};
 use dowse::engine::repo::RepoInfo;
 use dowse::engine::search::FileMatch;
 
-const LINE_NUMBER_WIDTH: f32 = 64.;
-
 pub(super) struct Preview {
     pub(super) repo: Arc<RepoInfo>,
     /// Relative to the repository root, `/`-separated.
     pub(super) path: String,
     pub(super) language: Option<&'static str>,
-    /// The chosen line, 1-based: highlighted, and where the editor opens.
-    pub(super) line: usize,
+    /// The requested line until the editor's native cursor takes over.
+    line: usize,
     pub(super) state: PreviewState,
-    pub(super) scroll: UniformListScrollHandle,
+    editor: Option<PreviewEditor>,
+    reveal: bool,
     task: Option<Task<()>>,
 }
 
 pub(super) enum PreviewState {
     Loading,
-    Ready(Arc<Loaded>),
+    Ready(Arc<FilePreview>),
     Failed(String),
 }
 
-pub(super) struct Loaded {
-    pub(super) file: FilePreview,
-    /// Syntax styles by line; empty without a grammar.
-    pub(super) syntax: Vec<LineStyles>,
+struct PreviewEditor {
+    state: Entity<EditorState>,
+    file: Arc<FilePreview>,
+    decorations: TextDecorationCollection,
+    style: HighlightStyle,
+    _subscription: Subscription,
 }
 
 impl Preview {
@@ -62,18 +62,91 @@ impl Preview {
         self.shows(&file.repo, &file.path)
     }
 
-    fn loaded(&self) -> Option<&Arc<Loaded>> {
+    fn loaded(&self) -> Option<&Arc<FilePreview>> {
         match &self.state {
             PreviewState::Ready(loaded) => Some(loaded),
             _ => None,
         }
     }
 
-    /// Choose `line` and bring it into view.
+    pub(super) fn current_line(&self, cx: &App) -> usize {
+        match &self.editor {
+            Some(editor) if !self.reveal => {
+                editor.state.read(cx).cursor_position().line as usize + 1
+            }
+            _ => self.line,
+        }
+    }
+
+    /// Let the editor reveal `line` using its native cursor scrolling.
     fn select(&mut self, line: usize) {
         self.line = line;
-        self.scroll
-            .scroll_to_item(line.saturating_sub(1), ScrollStrategy::Center);
+        self.reveal = true;
+    }
+
+    fn ensure_editor<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
+        let style = match_style(cx);
+        let Some(file) = self.loaded().cloned() else {
+            return;
+        };
+        if self.editor.is_none() {
+            let language = self.language.and_then(highlight::grammar).unwrap_or("text");
+            let state = cx.new(|cx| {
+                let mut state = EditorState::new(window, cx)
+                    .language(language)
+                    .searchable(false)
+                    .default_value(SharedString::new(file.text.clone()));
+                state.set_soft_wrap(false, window, cx);
+                state.set_line_number(true, window, cx);
+                state.set_folding(false, window, cx);
+                state.set_readonly(true, cx);
+                state
+            });
+            let decorations = state.update(cx, |state, cx| {
+                state.create_decorations_collection(Vec::new(), cx)
+            });
+            let subscription = cx.observe(&state, |_, _, cx| cx.notify());
+            self.editor = Some(PreviewEditor {
+                state,
+                file: file.clone(),
+                decorations,
+                style,
+                _subscription: subscription,
+            });
+            self.reveal = true;
+        }
+        let editor = self
+            .editor
+            .as_mut()
+            .expect("preview editor was initialized");
+        if !Arc::ptr_eq(&editor.file.text, &file.text) {
+            if !self.reveal {
+                self.line = editor.state.read(cx).cursor_position().line as usize + 1;
+            }
+            editor.state.update(cx, |state, cx| {
+                state.set_value(SharedString::new(file.text.clone()), window, cx);
+            });
+            self.reveal = true;
+        }
+        if !Arc::ptr_eq(&editor.file, &file) || editor.style != style || self.reveal {
+            editor.decorations.set(
+                file.highlights
+                    .iter()
+                    .map(|range| TextDecoration::new(range.clone(), style))
+                    .collect(),
+                cx,
+            );
+            editor.file = file.clone();
+            editor.style = style;
+        }
+        if self.reveal && editor.state.read(cx).line_height().is_some() {
+            self.line = self.line.clamp(1, file.line_starts.len());
+            let offset = file.line_offset(self.line);
+            editor.state.update(cx, |state, cx| {
+                state.set_selected_range(offset..offset, cx);
+            });
+            self.reveal = false;
+        }
     }
 }
 
@@ -104,17 +177,16 @@ impl SearchApp {
             language,
             line,
             state: PreviewState::Loading,
-            scroll: UniformListScrollHandle::new(),
+            editor: None,
+            reveal: true,
             task: None,
         });
         self.load_preview(self.active_tab, true, cx);
     }
 
-    /// Read the previewed file of the tab at `index` again, with its current
-    /// query and the current theme, then scroll to the chosen line when
-    /// `reveal` is set.
+    /// Read the file and mark the current query without replacing an unchanged
+    /// editor buffer, so its selection and scroll survive search refreshes.
     pub(super) fn load_preview(&mut self, index: usize, reveal: bool, cx: &mut Context<Self>) {
-        let theme = cx.theme().highlight_theme.clone();
         let Some(tab) = self.tabs.get_mut(index) else {
             return;
         };
@@ -124,23 +196,19 @@ impl SearchApp {
             return;
         };
         // This load replaces one that may still be on its way to the line.
-        let reveal = reveal || matches!(preview.state, PreviewState::Loading);
+        preview.reveal |= reveal || matches!(preview.state, PreviewState::Loading);
         let file = full_path(&preview.repo.root, &preview.path);
-        let grammar = preview.language.and_then(highlight::grammar);
+        let previous = preview.loaded().cloned();
         let (repo, path) = (preview.repo.clone(), preview.path.clone());
         preview.task = Some(cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move {
-                    let file = preview::load(&file, matcher.as_ref())?;
-                    let syntax = match grammar {
-                        Some(grammar) => {
-                            let lines: Vec<&str> =
-                                file.lines.iter().map(|line| line.text.as_str()).collect();
-                            highlight::highlight_once(grammar, &lines, &theme)
-                        }
-                        None => Vec::new(),
-                    };
-                    Ok::<_, String>(Loaded { file, syntax })
+                    let file = preview::load(&file, None)?;
+                    let source = previous
+                        .as_deref()
+                        .filter(|previous| previous.text == file.text)
+                        .unwrap_or(&file);
+                    Ok::<_, String>(source.with_matches(matcher.as_ref()))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -155,12 +223,7 @@ impl SearchApp {
                 };
                 preview.state = match loaded {
                     Ok(loaded) => {
-                        preview.line = preview.line.clamp(1, loaded.file.lines.len().max(1));
-                        if reveal {
-                            preview
-                                .scroll
-                                .scroll_to_item_strict(preview.line - 1, ScrollStrategy::Center);
-                        }
+                        preview.line = preview.line.clamp(1, loaded.line_starts.len());
                         PreviewState::Ready(Arc::new(loaded))
                     }
                     Err(error) => PreviewState::Failed(error),
@@ -189,6 +252,11 @@ impl SearchApp {
     /// Go to the next (or previous) match: within the previewed file, then
     /// on to the neighbouring result file, wrapping around.
     pub(super) fn step_match(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let line = self
+            .tab()
+            .preview
+            .as_ref()
+            .map(|preview| preview.current_line(cx));
         let tab = self.tab_mut();
         let Some(results) = tab.results.as_ref() else {
             return;
@@ -205,11 +273,13 @@ impl SearchApp {
                 // Still loading; its matches are not known yet.
                 return;
             };
-            let target = if forward {
-                loaded.file.next_match(preview.line)
-            } else {
-                loaded.file.previous_match(preview.line)
-            };
+            let target = line.and_then(|line| {
+                if forward {
+                    loaded.next_match(line)
+                } else {
+                    loaded.previous_match(line)
+                }
+            });
             if let Some(line) = target {
                 preview.select(line);
                 cx.notify();
@@ -241,7 +311,7 @@ impl SearchApp {
         self.preview_hit(repo, path, language, line, cx);
     }
 
-    /// Open the previewed file in the editor at the chosen line.
+    /// Open the previewed file in the external editor at the native cursor.
     pub(super) fn open_preview_in_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(preview) = self.tab().preview.as_ref() else {
             return;
@@ -249,7 +319,7 @@ impl SearchApp {
         let (root, path, line) = (
             preview.repo.root.clone(),
             preview.path.clone(),
-            preview.line,
+            preview.current_line(cx),
         );
         self.open_hit(&root, &path, line, window, cx);
     }
@@ -291,7 +361,16 @@ impl SearchApp {
 
     // ----- rendering -------------------------------------------------------------
 
-    pub(super) fn render_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.tab().preview_open
+            && let Some(preview) = self.tab_mut().preview.as_mut()
+        {
+            preview.ensure_editor(window, cx);
+        }
         let tab = self.tab();
         if !tab.preview_open {
             return None;
@@ -321,14 +400,14 @@ impl SearchApp {
             None => (String::new(), preview.path.clone()),
         };
         let loaded = preview.loaded().cloned();
-        let line = preview.line;
+        let line = preview.current_line(cx);
 
         let navigation = loaded
             .as_ref()
-            .filter(|loaded| !loaded.file.matches.is_empty())
+            .filter(|loaded| !loaded.matches.is_empty())
             .map(|loaded| {
-                let total = loaded.file.matches.len();
-                let position = match loaded.file.match_ordinal(line) {
+                let total = loaded.matches.len();
+                let position = match loaded.match_ordinal(line) {
                     Some(ordinal) => format!("{ordinal} of {}", format::count(total)),
                     None => format::plural(total, "match", "matches"),
                 };
@@ -406,9 +485,7 @@ impl SearchApp {
                     .xsmall()
                     .icon(Lucide::SquareArrowOutUpRight)
                     .label("Open in Editor")
-                    .tooltip(format!(
-                        "Open at line {line}; double-click a line to open there"
-                    ))
+                    .tooltip(format!("Open at cursor line {line}"))
                     .disabled(loaded.is_none())
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_preview_in_editor(window, cx)),
@@ -458,34 +535,23 @@ impl SearchApp {
                 error.clone(),
             )
             .into_any_element(),
-            PreviewState::Ready(loaded) => {
-                let theme = cx.theme();
-                div()
-                    .id("preview-body")
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(theme.mono_font_size)
-                    .child(
-                        uniform_list(
-                            "preview-lines",
-                            loaded.file.lines.len(),
-                            cx.processor(|this, range: Range<usize>, _, cx| {
-                                this.render_preview_lines(range, cx)
-                            }),
-                        )
-                        .track_scroll(&preview.scroll)
-                        .with_horizontal_sizing_behavior(
-                            ListHorizontalSizingBehavior::Unconstrained,
-                        )
-                        .with_width_from_item(Some(loaded.file.widest))
-                        .size_full()
-                        .py_1(),
+            PreviewState::Ready(_) => div()
+                .id("preview-body")
+                .flex_1()
+                .min_h_0()
+                .child(
+                    Editor::new(
+                        &preview
+                            .editor
+                            .as_ref()
+                            .expect("ready preview has an editor")
+                            .state,
                     )
-                    .scrollbar(&preview.scroll, ScrollbarAxis::Both)
-                    .into_any_element()
-            }
+                    .readonly(true)
+                    .bordered(false)
+                    .size_full(),
+                )
+                .into_any_element(),
         };
 
         Some(
@@ -500,65 +566,7 @@ impl SearchApp {
                 .into_any_element(),
         )
     }
-
-    fn render_preview_lines(
-        &mut self,
-        range: Range<usize>,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(preview) = self.tab().preview.as_ref() else {
-            return Vec::new();
-        };
-        let Some(loaded) = preview.loaded().cloned() else {
-            return Vec::new();
-        };
-        let selected = preview.line;
-        let theme = cx.theme();
-        let (muted, foreground, hover) =
-            (theme.muted_foreground, theme.foreground, theme.list_hover);
-        let selected_bg = theme
-            .yellow
-            .opacity(if theme.is_dark() { 0.16 } else { 0.18 });
-        range
-            .filter_map(|index| {
-                let line = loaded.file.lines.get(index)?;
-                let number = index + 1;
-                let is_match = loaded.file.matches.binary_search(&index).is_ok();
-                let styled = code_text(&line.text, loaded.syntax.get(index), &line.highlights, cx);
-                Some(
-                    h_flex()
-                        .id(("preview-line", index))
-                        .w_full()
-                        .cursor_pointer()
-                        .when(number == selected, |row| row.bg(selected_bg))
-                        .when(number != selected, |row| {
-                            row.hover(move |style| style.bg(hover))
-                        })
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(LINE_NUMBER_WIDTH))
-                                .pr_3()
-                                .text_right()
-                                .when(is_match, |gutter| {
-                                    gutter.text_color(foreground).font_semibold()
-                                })
-                                .when(!is_match, |gutter| gutter.text_color(muted))
-                                .child(number.to_string()),
-                        )
-                        .child(div().flex_none().whitespace_nowrap().pr_4().child(styled))
-                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            if let Some(preview) = this.tab_mut().preview.as_mut() {
-                                preview.line = number;
-                            }
-                            if event.click_count() >= 2 {
-                                this.open_preview_in_editor(window, cx);
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element(),
-                )
-            })
-            .collect()
-    }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,36 +1,79 @@
-//! A whole file prepared for the preview pane: every line ready to display,
-//! with the query's matches marked the way result snippets mark them.
+//! Source text and query match ranges for the read-only file preview.
 
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
 use regex::Regex;
 use tgrep_core::encoding::{self, EncodingMode};
 
-use super::search::{SearchLimits, display_line};
-
-/// Longer lines are clipped around their first match, as a minified file
-/// would otherwise be one enormous line.
-pub const MAX_LINE_LEN: usize = 4000;
+use super::search::SearchLimits;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreviewLine {
-    /// The line with tabs expanded, clipped to [`MAX_LINE_LEN`].
-    pub text: String,
-    /// Byte ranges of `text` the query matches.
+pub struct FilePreview {
+    pub text: Arc<str>,
+    /// UTF-8 byte offsets of logical lines, including a trailing empty line.
+    pub line_starts: Vec<usize>,
+    /// 0-based indexes of the lines the query matches, in order.
+    pub matches: Vec<usize>,
+    /// Query matches in the original source's UTF-8 byte coordinates.
     pub highlights: Vec<Range<usize>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FilePreview {
-    pub lines: Vec<PreviewLine>,
-    /// 0-based indexes of the lines the query matches, in order.
-    pub matches: Vec<usize>,
-    /// The line with the most characters, which sets the view's width.
-    pub widest: usize,
+impl Default for FilePreview {
+    fn default() -> Self {
+        Self {
+            text: Arc::from(""),
+            line_starts: vec![0],
+            matches: Vec::new(),
+            highlights: Vec::new(),
+        }
+    }
 }
 
 impl FilePreview {
+    pub fn with_matches(&self, matcher: Option<&Regex>) -> Self {
+        let mut preview = Self {
+            text: self.text.clone(),
+            line_starts: self.line_starts.clone(),
+            ..Default::default()
+        };
+        preview.mark_matches(matcher);
+        preview
+    }
+
+    fn mark_matches(&mut self, matcher: Option<&Regex>) {
+        if let Some(matcher) = matcher {
+            for (index, &start) in self.line_starts.iter().enumerate() {
+                if start == self.text.len() {
+                    break;
+                }
+                let end = self
+                    .line_starts
+                    .get(index + 1)
+                    .copied()
+                    .unwrap_or(self.text.len());
+                let line = &self.text[start..end];
+                let line = line.strip_suffix('\n').unwrap_or(line);
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                let first = self.highlights.len();
+                self.highlights.extend(
+                    matcher
+                        .find_iter(line)
+                        .filter(|m| !m.is_empty())
+                        .map(|m| start + m.start()..start + m.end()),
+                );
+                if self.highlights.len() != first || matcher.is_match(line) {
+                    self.matches.push(index);
+                }
+            }
+        }
+    }
+
+    pub fn line_offset(&self, line: usize) -> usize {
+        self.line_starts[line.saturating_sub(1).min(self.line_starts.len() - 1)]
+    }
+
     /// The first match after the 1-based `line`, as a 1-based line.
     pub fn next_match(&self, line: usize) -> Option<usize> {
         let index = self.matches.partition_point(|&m| m < line);
@@ -69,36 +112,15 @@ pub fn load(path: &Path, matcher: Option<&Regex>) -> Result<FilePreview, String>
 }
 
 fn prepare(text: &str, matcher: Option<&Regex>) -> FilePreview {
-    let text = text.strip_suffix('\n').unwrap_or(text);
-    let mut preview = FilePreview::default();
-    let mut widest = 0;
-    for (index, line) in text.split('\n').enumerate() {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        let ranges: Vec<Range<usize>> = match matcher {
-            Some(matcher) => {
-                let ranges: Vec<_> = matcher
-                    .find_iter(line)
-                    .filter(|m| !m.is_empty())
-                    .map(|m| m.range())
-                    .collect();
-                if !ranges.is_empty() || matcher.is_match(line) {
-                    preview.matches.push(index);
-                }
-                ranges
-            }
-            None => Vec::new(),
-        };
-        let (display, highlights) = display_line(line, &ranges, MAX_LINE_LEN);
-        let width = display.chars().count();
-        if width > widest {
-            widest = width;
-            preview.widest = index;
-        }
-        preview.lines.push(PreviewLine {
-            text: display,
-            highlights,
-        });
-    }
+    let line_starts = std::iter::once(0)
+        .chain(memchr::memchr_iter(b'\n', text.as_bytes()).map(|offset| offset + 1))
+        .collect();
+    let mut preview = FilePreview {
+        text: Arc::from(text),
+        line_starts,
+        ..Default::default()
+    };
+    preview.mark_matches(matcher);
     preview
 }
 
@@ -107,14 +129,76 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marks_matches_and_expands_tabs() {
+    fn marks_matches_without_changing_source_text() {
         let matcher = Regex::new("foo").unwrap();
-        let preview = prepare("a\r\n\tfoo foo\r\nbar\nwide line here\n", Some(&matcher));
-        let texts: Vec<&str> = preview.lines.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, vec!["a", "    foo foo", "bar", "wide line here"]);
+        let text = "a\r\n\tfoo foo\r\nbar\nwide line here\n";
+        let preview = prepare(text, Some(&matcher));
+        assert_eq!(preview.text.as_ref(), text);
+        assert_eq!(preview.line_starts, vec![0, 3, 13, 17, 32]);
         assert_eq!(preview.matches, vec![1]);
-        assert_eq!(preview.lines[1].highlights, vec![4..7, 8..11]);
-        assert_eq!(preview.widest, 3);
+        assert_eq!(preview.highlights, vec![4..7, 8..11]);
+    }
+
+    #[test]
+    fn match_ranges_use_original_utf8_offsets() {
+        let text = "\u{4e2d}\tfoo  \r\n\u{1f980}foo\t \n";
+        let preview = prepare(text, Some(&Regex::new("foo").unwrap()));
+        assert_eq!(preview.text.as_ref(), text);
+        assert_eq!(preview.highlights, vec![4..7, 15..18]);
+        assert_eq!(preview.matches, vec![0, 1]);
+        for range in &preview.highlights {
+            assert_eq!(&preview.text[range.clone()], "foo");
+        }
+    }
+
+    #[test]
+    fn preserves_long_lines_and_more_than_ten_thousand_lines() {
+        let text = format!("{}\n{}foo\n", "x\n".repeat(10_001), "a".repeat(20_000));
+        let preview = prepare(&text, Some(&Regex::new("foo").unwrap()));
+        assert_eq!(preview.text.as_ref(), text);
+        assert_eq!(preview.line_starts.len(), 10_004);
+        assert_eq!(preview.matches, vec![10_002]);
+        assert_eq!(&preview.text[preview.highlights[0].clone()], "foo");
+    }
+
+    #[test]
+    fn refreshing_matches_reuses_source_and_clears_old_ranges() {
+        let preview = prepare("\tfoo  \r\nbar\n", Some(&Regex::new("foo").unwrap()));
+        let refreshed = preview.with_matches(Some(&Regex::new("bar").unwrap()));
+        assert!(std::sync::Arc::ptr_eq(&preview.text, &refreshed.text));
+        assert_eq!(preview.matches, vec![0]);
+        assert_eq!(refreshed.matches, vec![1]);
+        assert_eq!(refreshed.highlights, vec![8..11]);
+        let cleared = refreshed.with_matches(None);
+        assert!(cleared.matches.is_empty());
+        assert!(cleared.highlights.is_empty());
+    }
+
+    #[test]
+    fn line_offsets_include_empty_and_trailing_lines() {
+        assert_eq!(prepare("", None).line_starts, vec![0]);
+        assert_eq!(prepare("a\n\n", None).line_starts, vec![0, 2, 3]);
+        assert_eq!(prepare("a", None).line_starts, vec![0]);
+        assert_eq!(FilePreview::default().line_offset(1), 0);
+        let preview = prepare("a\nb", None);
+        assert_eq!(preview.line_offset(0), 0);
+        assert_eq!(preview.line_offset(1), 0);
+        assert_eq!(preview.line_offset(2), 2);
+        assert_eq!(preview.line_offset(usize::MAX), 2);
+    }
+
+    #[test]
+    fn zero_width_matches_navigate_without_empty_decorations() {
+        let preview = prepare("foo\r\n\nbar\n", Some(&Regex::new("^foo$").unwrap()));
+        assert_eq!(preview.matches, vec![0]);
+        let preview = preview.with_matches(Some(&Regex::new("^$").unwrap()));
+        assert_eq!(preview.matches, vec![1]);
+        assert!(preview.highlights.is_empty());
+        assert!(
+            prepare("", Some(&Regex::new("^$").unwrap()))
+                .matches
+                .is_empty()
+        );
     }
 
     #[test]
@@ -136,7 +220,8 @@ mod tests {
         let text = dir.path().join("a.rs");
         std::fs::write(&text, "fn main() {}\n").unwrap();
         let preview = load(&text, None).unwrap();
-        assert_eq!(preview.lines.len(), 1);
+        assert_eq!(preview.text.as_ref(), "fn main() {}\n");
+        assert_eq!(preview.line_starts.len(), 2);
         assert!(preview.matches.is_empty());
 
         let binary = dir.path().join("b.bin");

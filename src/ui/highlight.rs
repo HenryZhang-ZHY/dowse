@@ -110,8 +110,8 @@ impl Highlighters {
     }
 }
 
-/// Styles for each of `lines`, parsed as consecutive lines of `grammar`,
-/// with a highlighter of its own (for background threads).
+/// Styles for a run of lines using a fresh highlighter.
+#[cfg(test)]
 pub(super) fn highlight_once(
     grammar: &str,
     lines: &[&str],

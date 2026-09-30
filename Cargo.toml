@@ -40,6 +40,7 @@ log = "0.4"
 async-channel = "2"
 
 [dev-dependencies]
+gpui-kit = { version = "0.6.6", features = ["test-support"] }
 tempfile = "3"
 
 [build-dependencies]

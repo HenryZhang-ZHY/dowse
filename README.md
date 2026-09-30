@@ -151,10 +151,18 @@ facet narrows them to Rust, and the table lays them out one row per line.
   brings it back on the same file.
   `F4` and `Shift+F4` step through the matches, on into the next or previous file.
   Each tab keeps its own preview. The preview is for reading; nothing is edited.
+  Its read-only Editor provides text selection and copying: drag across lines,
+  double-click a word or triple-click a line, then press `Ctrl+C` (`Cmd+C` on
+  macOS). Tabs, trailing whitespace and long lines stay in the source text;
+  long lines scroll horizontally instead of wrapping. Match marks use the
+  Editor's native decorations, and jumps use its normal scroll-to-cursor behavior.
+  Selection, line numbers and scrolling use the library's standard UI, without
+  custom row backgrounds or bold match-line numbers. Syntax highlighting follows
+  the languages supported by the library.
 
   ![The preview pane showing a whole file beside the results, with the query's matches marked](docs/images/file-preview.webp)
-- **Open in your editor** from the preview's "Open in Editor" button (at the chosen
-  line), by double-clicking a line there, or straight from the results with
+- **Open in your editor** from the preview's "Open in Editor" button (at the active
+  cursor's line, including after a text selection), or straight from the results with
   `Ctrl+Click`. VS Code, Cursor, Zed or Sublime Text is used when found on `PATH`,
   otherwise the system default application. Set `DOWSE_EDITOR` to choose, for
   example `code -g {file}:{line}` or `nvim-qt +{line} {file}`.

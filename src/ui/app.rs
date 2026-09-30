@@ -343,9 +343,6 @@ impl SearchApp {
             if let Some(results) = self.tabs[index].results.as_mut() {
                 results.syntax.clear();
             }
-            if self.tabs[index].preview.is_some() {
-                self.load_preview(index, false, cx);
-            }
         }
         cx.notify();
     }
