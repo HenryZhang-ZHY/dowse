@@ -138,7 +138,8 @@ facet narrows them to Rust, and the table lays them out one row per line.
   macOS), or a mouse's back and forward buttons. Going back brings the search back
   with its filters and the file it was previewing. A search counts as a step once
   you pause, press `Enter`, change an option or filter, or preview a result, so
-  typing a query is one step, not one per letter.
+  typing a query is one step, not one per letter. After that, changing its
+  filters is a step of its own.
 - **The menu** at the left of the title bar holds every command by kind: File
   (windows and tabs), Workspace (new, open, save, recent), Repositories (the
   repositories page, adding and cloning, pulling and indexing, background tasks),

@@ -136,6 +136,20 @@ impl SearchApp {
         history.forward.clear();
     }
 
+    /// The current search is about to show something else worth coming back
+    /// from, such as other filters: once settled, it becomes the step to go
+    /// back to. Before that, the change is part of the step being typed.
+    pub(super) fn note_view(&mut self, cx: &App) {
+        let query = self.tab().query(cx);
+        if self.tab().history.settled.as_ref() != Some(&query) {
+            return;
+        }
+        let visit = Visit::of(self.tab(), query, cx);
+        let history = &mut self.tab_mut().history;
+        push(&mut history.back, Entry::Search(visit));
+        history.forward.clear();
+    }
+
     /// Forget every tab's steps, as when the workspace changes. Back still
     /// leaves the repositories page for the search.
     pub(super) fn forget_history(&mut self, cx: &App) {

@@ -6,6 +6,7 @@ use super::SETTLE_AFTER;
 use crate::ui::app::{Page, SearchApp, TabsOpening};
 use crate::ui::tasks::TaskHub;
 use crate::ui::windows::{Opening, Windows};
+use dowse::engine::facets::FacetKind;
 
 fn open(cx: &mut TestAppContext) -> (Entity<SearchApp>, &mut VisualTestContext) {
     let config = tempfile::tempdir().unwrap().keep();
@@ -66,6 +67,22 @@ fn can_go(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> (bool, bool) {
 fn show_page(app: &Entity<SearchApp>, page: Page, cx: &mut VisualTestContext) {
     app.update_in(cx, |this, window, cx| this.show_page(page, window, cx));
     cx.run_until_parked();
+}
+
+fn toggle_language(app: &Entity<SearchApp>, language: &str, cx: &mut VisualTestContext) {
+    let language = language.to_string();
+    app.update(cx, |this, cx| {
+        this.toggle_facet(FacetKind::Language, language, cx)
+    });
+}
+
+fn language(app: &Entity<SearchApp>, cx: &mut VisualTestContext) -> Option<String> {
+    app.read_with(cx, |this, _| {
+        this.tab()
+            .facet_filter
+            .get(&FacetKind::Language)
+            .map(str::to_string)
+    })
 }
 
 #[gpui::test]
@@ -193,4 +210,49 @@ fn back_still_leaves_repositories_after_the_workspace_changes(cx: &mut TestAppCo
         (Page::Search, "bar".into())
     );
     assert_eq!(can_go(&app, cx), (false, true));
+}
+
+#[gpui::test]
+fn filtering_a_settled_search_is_a_step(cx: &mut TestAppContext) {
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    pause(cx);
+    toggle_language(&app, "Rust", cx);
+    assert_eq!(can_go(&app, cx), (true, false));
+
+    back(&app, cx);
+    assert_eq!(
+        (pattern(&app, cx), language(&app, cx)),
+        ("foo".into(), None)
+    );
+    forward(&app, cx);
+    assert_eq!(language(&app, cx).as_deref(), Some("Rust"));
+
+    app.update(cx, |this, cx| this.clear_facet(&FacetKind::Language, cx));
+    back(&app, cx);
+    assert_eq!(language(&app, cx).as_deref(), Some("Rust"));
+}
+
+#[gpui::test]
+fn filtering_while_typing_is_part_of_the_same_step(cx: &mut TestAppContext) {
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    toggle_language(&app, "Rust", cx);
+    assert_eq!(can_go(&app, cx), (false, false));
+
+    type_query(&app, "bar", cx);
+    back(&app, cx);
+    assert_eq!(
+        (pattern(&app, cx), language(&app, cx)),
+        ("foo".into(), Some("Rust".into()))
+    );
+}
+
+#[gpui::test]
+fn clearing_a_filter_that_is_not_set_is_no_step(cx: &mut TestAppContext) {
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    pause(cx);
+    app.update(cx, |this, cx| this.clear_facet(&FacetKind::Language, cx));
+    assert_eq!(can_go(&app, cx), (false, false));
 }

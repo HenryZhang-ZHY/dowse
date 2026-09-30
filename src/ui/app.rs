@@ -355,6 +355,7 @@ impl SearchApp {
     }
 
     pub(super) fn toggle_facet(&mut self, kind: FacetKind, value: String, cx: &mut Context<Self>) {
+        self.note_view(cx);
         let tab = self.tab_mut();
         tab.facet_filter.toggle(kind, value);
         tab.refresh_visible();
@@ -363,6 +364,10 @@ impl SearchApp {
     }
 
     pub(super) fn clear_facet(&mut self, kind: &FacetKind, cx: &mut Context<Self>) {
+        if self.tab().facet_filter.get(kind).is_none() {
+            return;
+        }
+        self.note_view(cx);
         let tab = self.tab_mut();
         tab.facet_filter.clear(kind);
         tab.refresh_visible();
