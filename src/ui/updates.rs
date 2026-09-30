@@ -25,9 +25,11 @@ use gpui_kit::*;
 use semver::Version;
 
 use super::app::SearchApp;
+use super::hub::RepoHub;
 use super::tasks::TaskHub;
 use super::windows::Windows;
 use crate::format;
+use dowse::engine::settings::UpdateSettings;
 use dowse::engine::update::client::Client;
 use dowse::engine::update::install::{self, Installation, Progress};
 use dowse::engine::update::release::{Release, Source, current_version};
@@ -133,8 +135,9 @@ impl UpdateHub {
         &self.current
     }
 
-    pub(super) fn automatic(&self) -> bool {
-        self.state.automatic
+    /// Whether dowse looks for updates on its own: the `updates.check` setting.
+    pub(super) fn automatic(cx: &App) -> bool {
+        RepoHub::global(cx).read(cx).settings().updates.check()
     }
 
     pub(super) fn checking(&self) -> bool {
@@ -160,13 +163,22 @@ impl UpdateHub {
 
     // ----- changing ----------------------------------------------------------------
 
-    pub(super) fn set_automatic(&mut self, automatic: bool, cx: &mut Context<Self>) {
-        self.state.automatic = automatic;
-        self.save();
-        if self.is_due() {
-            self.check(cx);
-        }
-        cx.notify();
+    /// Turn looking for updates on its own on or off, and look now when
+    /// turned on and a look is due.
+    pub(super) fn set_automatic(automatic: bool, cx: &mut App) -> Result<(), String> {
+        let settings = UpdateSettings {
+            check: (!automatic).then_some(false),
+        };
+        RepoHub::global(cx)
+            .update(cx, |hub, cx| hub.set_update_settings(settings, cx))
+            .map_err(|error| format!("Could not save the settings: {error:#}"))?;
+        Self::global(cx).update(cx, |this, cx| {
+            if this.is_due(cx) {
+                this.check(cx);
+            }
+            cx.notify();
+        });
+        Ok(())
     }
 
     /// Stop offering the newer release.
@@ -195,7 +207,7 @@ impl UpdateHub {
             cx.background_executor().timer(FIRST_CHECK).await;
             loop {
                 let alive = this.update(cx, |this, cx| {
-                    if this.is_due() {
+                    if this.is_due(cx) {
                         this.check(cx);
                     }
                 });
@@ -209,8 +221,12 @@ impl UpdateHub {
 
     /// Whether a scheduled look is due. A failed one is tried again on the
     /// next round of the schedule.
-    fn is_due(&self) -> bool {
-        RELEASED_BUILD && !self.locked && !self.checking && self.state.is_due(SystemTime::now())
+    fn is_due(&self, cx: &App) -> bool {
+        RELEASED_BUILD
+            && Self::automatic(cx)
+            && !self.locked
+            && !self.checking
+            && self.state.is_due(SystemTime::now())
     }
 
     /// Ask GitHub for the latest release, on a thread of its own.
@@ -249,7 +265,6 @@ impl UpdateHub {
             Ok(answer) => {
                 // What the user chose while GitHub was being asked stands.
                 self.state = UpdateState {
-                    automatic: self.state.automatic,
                     skipped: self.state.skipped.clone(),
                     ..answer
                 };
@@ -531,7 +546,7 @@ fn update_dialog(hub: &UpdateHub, cx: &App) -> (AnyElement, AnyElement) {
                     .child(heading(title)),
             )
             .when_some(detail, |body, detail| body.child(note(detail)))
-            .child(automatic_note(hub));
+            .child(automatic_note(cx));
         let footer = buttons
             .when(!hub.checking(), |row| {
                 row.child(
@@ -699,13 +714,13 @@ fn update_dialog(hub: &UpdateHub, cx: &App) -> (AnyElement, AnyElement) {
 }
 
 /// Whether dowse looks on its own, and where to change it.
-fn automatic_note(hub: &UpdateHub) -> impl IntoElement {
+fn automatic_note(cx: &App) -> impl IntoElement {
     let text = if !RELEASED_BUILD {
         "This build is from source, so dowse does not look for updates on its own."
-    } else if hub.automatic() {
-        "dowse looks for updates once a day. Turn it off in Help > Check for Updates Automatically."
+    } else if UpdateHub::automatic(cx) {
+        "dowse looks for updates once a day. Turn it off in Help > Check for Updates          Automatically, or with `dowse settings set updates.check false`."
     } else {
-        "dowse does not look for updates on its own. Turn it on in Help > Check for Updates Automatically."
+        "dowse does not look for updates on its own. Turn it on in Help > Check for          Updates Automatically."
     };
     div().text_xs().child(text)
 }

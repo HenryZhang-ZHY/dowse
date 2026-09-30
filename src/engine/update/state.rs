@@ -1,6 +1,6 @@
-//! What dowse remembers about updates, in `update.json`: whether to look
-//! for them, when it last looked and what it found, and the version the
-//! user chose to skip.
+//! What dowse remembers about updates, in `update.json`: when it last
+//! looked and what it found, and the version the user chose to skip.
+//! Whether it looks on its own is a setting (`updates.check`).
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -15,11 +15,8 @@ use crate::engine::store;
 /// How long an answer from GitHub is good for.
 pub const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateState {
-    /// Look for updates on a schedule. Checking by hand works either way.
-    #[serde(default = "yes")]
-    pub automatic: bool,
     /// When GitHub last answered, in seconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<u64>,
@@ -33,22 +30,6 @@ pub struct UpdateState {
     /// A version not to offer again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped: Option<Version>,
-}
-
-fn yes() -> bool {
-    true
-}
-
-impl Default for UpdateState {
-    fn default() -> Self {
-        Self {
-            automatic: true,
-            checked_at: None,
-            etag: None,
-            latest: None,
-            skipped: None,
-        }
-    }
 }
 
 impl UpdateState {
@@ -66,17 +47,15 @@ impl UpdateState {
             .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
     }
 
-    /// Whether a scheduled check is due at `now`: never when turned off,
-    /// otherwise once [`CHECK_EVERY`] has passed since GitHub last answered.
-    /// A clock set back counts as due, rather than waiting until it catches up.
+    /// Whether a scheduled check is due at `now`: once [`CHECK_EVERY`] has
+    /// passed since GitHub last answered. A clock set back counts as due,
+    /// rather than waiting until it catches up.
     pub fn is_due(&self, now: SystemTime) -> bool {
-        self.automatic
-            && self
-                .checked_at()
-                .is_none_or(|at| match now.duration_since(at) {
-                    Ok(since) => since >= CHECK_EVERY,
-                    Err(_) => true,
-                })
+        self.checked_at()
+            .is_none_or(|at| match now.duration_since(at) {
+                Ok(since) => since >= CHECK_EVERY,
+                Err(_) => true,
+            })
     }
 
     /// Note GitHub's answer at `now`. `None` for the release means it was
@@ -128,25 +107,16 @@ mod tests {
     }
 
     #[test]
-    fn starts_automatic_and_round_trips() {
+    fn starts_empty_and_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("update.json");
-        let fresh = UpdateState::load(&file).unwrap();
-        assert!(fresh.automatic);
-        assert_eq!(fresh, UpdateState::default());
+        assert_eq!(UpdateState::load(&file).unwrap(), UpdateState::default());
 
         let mut state = UpdateState::default();
         state.record(Some(release("1.2.0")), Some("W/\"abc\"".into()), at(1000));
         state.skipped = Some(Version::new(1, 2, 0));
-        state.automatic = false;
         state.save(&file).unwrap();
         assert_eq!(UpdateState::load(&file).unwrap(), state);
-    }
-
-    #[test]
-    fn a_file_without_the_switch_is_automatic() {
-        let state: UpdateState = serde_json::from_str("{}").unwrap();
-        assert!(state.automatic);
     }
 
     #[test]
@@ -159,9 +129,6 @@ mod tests {
         assert!(state.is_due(at(10 * day + day)));
         // The clock went back.
         assert!(state.is_due(at(5 * day)));
-
-        state.automatic = false;
-        assert!(!state.is_due(at(20 * day)));
     }
 
     #[test]

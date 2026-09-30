@@ -29,7 +29,7 @@ use dowse::engine::query::CompiledQuery;
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::{self, SearchLimits};
 use dowse::engine::session::CloneDefaults;
-use dowse::engine::settings::{IndexLocation, Settings};
+use dowse::engine::settings::IndexLocation;
 use dowse::engine::sync::Interval;
 use dowse::engine::table::ResultTable;
 use dowse::engine::tasks::TaskState;
@@ -901,9 +901,7 @@ fn settings(
     cx: &mut App,
 ) -> Result<Vec<Frame>, String> {
     let hub = RepoHub::global(cx);
-    let mut settings = Settings {
-        index: hub.read(cx).index_settings().clone(),
-    };
+    let mut settings = hub.read(cx).settings().clone();
     for (key, value) in set {
         settings.set(key, value)?;
     }
@@ -911,7 +909,8 @@ fn settings(
         settings.unset(key)?;
     }
     hub.update(cx, |hub, cx| {
-        hub.set_index_settings(settings.index.clone(), cx)
+        hub.set_index_settings(settings.index.clone(), cx)?;
+        hub.set_update_settings(settings.updates.clone(), cx)
     })
     .map_err(|error| format!("{error:#}"))?;
     let values = settings

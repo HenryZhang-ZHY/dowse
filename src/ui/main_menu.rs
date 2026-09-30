@@ -5,6 +5,7 @@
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Side, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
@@ -308,8 +309,10 @@ fn help_menu(menu: PopupMenu, app: &WeakEntity<SearchApp>, automatic: bool) -> P
         .item(
             PopupMenuItem::new("Check for Updates Automatically")
                 .checked(automatic)
-                .on_click(move |_, _, cx| {
-                    UpdateHub::global(cx).update(cx, |hub, cx| hub.set_automatic(!automatic, cx));
+                .on_click(move |_, window, cx| {
+                    if let Err(error) = UpdateHub::set_automatic(!automatic, cx) {
+                        window.push_notification(Notification::error(error), cx);
+                    }
                 }),
         )
         .separator()
@@ -340,7 +343,7 @@ impl SearchApp {
             .tooltip("Menu")
             .dropdown_menu(move |menu, window, cx| {
                 let dark = cx.theme().is_dark();
-                let automatic = UpdateHub::global(cx).read(cx).automatic();
+                let automatic = UpdateHub::automatic(cx);
                 let (file, repos, view, help) =
                     (app.clone(), app.clone(), app.clone(), app.clone());
                 let (workspace_app, workspace) = (app.clone(), workspace.clone());

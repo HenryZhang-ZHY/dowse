@@ -65,6 +65,9 @@ Settings:
                       the tgrep command line finds it; the default) or external
                       (outside the repository, where cleaning it cannot delete it)
   index.external-dir  the folder external indexes go under
+  updates.check       whether the app looks for a new release once a day: true
+                      (the default) or false; Help > Check for Updates… asks at
+                      any time
 
 Changing where indexes are kept moves them; one that cannot be moved stays
 where it was and is built again in its new place.
@@ -72,7 +75,8 @@ where it was and is built again in its new place.
 Examples:
   dowse settings set index.location external
   dowse settings set index.external-dir D:/dowse-indexes
-  dowse settings unset index.location")]
+  dowse settings unset index.location
+  dowse settings set updates.check false")]
     Settings(SettingsArgs),
     /// Show what the running app is doing.
     Status(JsonArg),

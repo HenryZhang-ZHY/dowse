@@ -1,5 +1,6 @@
-//! App-wide settings, kept in `settings.json` beside the library. A
-//! repository can override some of them in the library.
+//! App-wide settings, kept in `settings.json` beside the library: where
+//! indexes are kept, which a repository can override in the library, and
+//! whether dowse looks for updates.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,8 @@ use super::store;
 pub struct Settings {
     #[serde(default, skip_serializing_if = "IndexSettings::is_default")]
     pub index: IndexSettings,
+    #[serde(default, skip_serializing_if = "UpdateSettings::is_default")]
+    pub updates: UpdateSettings,
 }
 
 impl Settings {
@@ -36,6 +39,13 @@ impl Settings {
                 }
                 self.index.external_dir = Some(dir);
             }
+            UPDATES_CHECK_KEY => {
+                self.updates.check = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("{key} is true or false, not {value}"))?,
+                );
+            }
             _ => return Err(unknown_key(key)),
         }
         Ok(())
@@ -46,6 +56,7 @@ impl Settings {
         match key {
             LOCATION_KEY => self.index.location = None,
             EXTERNAL_DIR_KEY => self.index.external_dir = None,
+            UPDATES_CHECK_KEY => self.updates.check = None,
             _ => return Err(unknown_key(key)),
         }
         Ok(())
@@ -64,6 +75,11 @@ impl Settings {
                 display_path(&self.index.external_dir()),
                 self.index.external_dir.is_none(),
             ),
+            (
+                UPDATES_CHECK_KEY,
+                self.updates.check().to_string(),
+                self.updates.check.is_none(),
+            ),
         ]
     }
 }
@@ -72,9 +88,32 @@ impl Settings {
 pub const LOCATION_KEY: &str = "index.location";
 /// The folder external indexes go under.
 pub const EXTERNAL_DIR_KEY: &str = "index.external-dir";
+/// Whether dowse looks for a new release on its own.
+pub const UPDATES_CHECK_KEY: &str = "updates.check";
 
 fn unknown_key(key: &str) -> String {
-    format!("there is no setting {key}; there are {LOCATION_KEY} and {EXTERNAL_DIR_KEY}")
+    format!(
+        "there is no setting {key}; there are {LOCATION_KEY}, {EXTERNAL_DIR_KEY} and          {UPDATES_CHECK_KEY}"
+    )
+}
+
+/// Whether dowse looks for updates. Unset, it does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateSettings {
+    /// Look for a new release a day after the last look. Looking by hand
+    /// works either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<bool>,
+}
+
+impl UpdateSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn check(&self) -> bool {
+        self.check.unwrap_or(true)
+    }
 }
 
 /// Where indexes are kept. Unset fields take their defaults, so a file only
@@ -232,6 +271,7 @@ mod tests {
                 location: Some(IndexLocation::External),
                 external_dir: Some(PathBuf::from("/indexes")),
             },
+            ..Default::default()
         };
         settings.save(&file).unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
@@ -297,6 +337,7 @@ mod tests {
         settings
             .set(EXTERNAL_DIR_KEY, dir.to_str().unwrap())
             .unwrap();
+        settings.set(UPDATES_CHECK_KEY, "false").unwrap();
         assert_eq!(settings.index.location, Some(IndexLocation::External));
         assert_eq!(settings.index.external_dir(), dir);
         assert!(settings.entries().iter().all(|(_, _, default)| !*default));
@@ -309,6 +350,36 @@ mod tests {
 
         settings.unset(LOCATION_KEY).unwrap();
         settings.unset(EXTERNAL_DIR_KEY).unwrap();
+        settings.unset(UPDATES_CHECK_KEY).unwrap();
+        assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn looking_for_updates_is_on_until_turned_off() {
+        let mut settings = Settings::default();
+        assert!(settings.updates.check());
+        let entry = |settings: &Settings| {
+            settings
+                .entries()
+                .into_iter()
+                .find(|(key, ..)| *key == UPDATES_CHECK_KEY)
+                .unwrap()
+        };
+        assert_eq!(entry(&settings), (UPDATES_CHECK_KEY, "true".into(), true));
+
+        settings.set(UPDATES_CHECK_KEY, "false").unwrap();
+        assert!(!settings.updates.check());
+        assert_eq!(entry(&settings), (UPDATES_CHECK_KEY, "false".into(), false));
+        assert!(settings.set(UPDATES_CHECK_KEY, "sometimes").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        settings.save(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(r#""check": false"#), "{text}");
+        assert_eq!(Settings::load(&file).unwrap(), settings);
+
+        settings.unset(UPDATES_CHECK_KEY).unwrap();
         assert_eq!(settings, Settings::default());
     }
 
