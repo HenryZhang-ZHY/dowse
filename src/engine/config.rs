@@ -48,6 +48,16 @@ impl ConfigDir {
         self.root.join("session.json")
     }
 
+    /// Whether to look for updates, and what the last look found.
+    pub fn update_file(&self) -> PathBuf {
+        self.root.join("update.json")
+    }
+
+    /// Where updates are downloaded and unpacked before they are installed.
+    pub fn updates_dir(&self) -> PathBuf {
+        self.root.join("updates")
+    }
+
     /// The app's log files.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
