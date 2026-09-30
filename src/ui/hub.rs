@@ -19,7 +19,9 @@ use dowse::engine::index::{self, Corpus, IndexMove, IndexStatus, IndexUpdate, Re
 use dowse::engine::library::{Library, LibraryEntry};
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::SearchSource;
-use dowse::engine::settings::{IndexLocation, IndexPlace, IndexSettings, Settings, UpdateSettings};
+use dowse::engine::settings::{
+    IndexLocation, IndexPlace, IndexSettings, Settings, TaskSettings, UpdateSettings,
+};
 use dowse::engine::sync::Interval;
 use dowse::engine::watch::ChangeTracker;
 
@@ -220,6 +222,10 @@ impl RepoHub {
         cx.global::<GlobalHub>().0.clone()
     }
 
+    pub(super) fn try_global(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<GlobalHub>().map(|hub| hub.0.clone())
+    }
+
     // ----- the library ----------------------------------------------------------
 
     /// The repositories at `paths`, known to the library from now on. With
@@ -380,6 +386,27 @@ impl RepoHub {
             );
         }
         self.settings.updates = settings;
+        self.settings.save(&self.settings_file)?;
+        cx.notify();
+        Ok(())
+    }
+
+    /// Change how many clones and pulls run at once.
+    pub(super) fn set_task_settings(
+        &mut self,
+        settings: TaskSettings,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if self.settings.tasks == settings {
+            return Ok(());
+        }
+        if self.settings_locked {
+            anyhow::bail!(
+                "{} could not be read, so it is not overwritten; fix or remove it first",
+                self.settings_file.display()
+            );
+        }
+        self.settings.tasks = settings;
         self.settings.save(&self.settings_file)?;
         cx.notify();
         Ok(())

@@ -910,9 +910,11 @@ fn settings(
     }
     hub.update(cx, |hub, cx| {
         hub.set_index_settings(settings.index.clone(), cx)?;
+        hub.set_task_settings(settings.tasks.clone(), cx)?;
         hub.set_update_settings(settings.updates.clone(), cx)
     })
     .map_err(|error| format!("{error:#}"))?;
+    TaskHub::global(cx).update(cx, |tasks, cx| tasks.apply_settings(&settings.tasks, cx));
     let values = settings
         .entries()
         .into_iter()

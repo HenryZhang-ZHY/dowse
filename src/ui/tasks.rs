@@ -13,6 +13,7 @@ use gpui_kit::*;
 use super::app::SearchApp;
 use super::hub::{IndexJob, RepoHub};
 use dowse::engine::github::{self, CloneMode};
+use dowse::engine::settings::TaskSettings;
 use dowse::engine::sync::{self, Interval, PullOutcome};
 use dowse::engine::tasks::{Started, TaskInfo, TaskKind, TaskList, TaskState};
 
@@ -77,8 +78,15 @@ impl Global for GlobalTasks {}
 
 impl TaskHub {
     pub(super) fn init(cx: &mut App) {
+        let settings = RepoHub::try_global(cx)
+            .map(|hub| hub.read(cx).settings().tasks.clone())
+            .unwrap_or_default();
+        let mut list = TaskList::default();
+        for kind in [TaskKind::Clone, TaskKind::Pull] {
+            list.set_limit(kind, settings.limit(kind));
+        }
         let hub = cx.new(|cx| Self {
-            list: TaskList::default(),
+            list,
             jobs: HashMap::new(),
             pulls: HashMap::new(),
             runners: HashMap::new(),
@@ -126,9 +134,24 @@ impl TaskHub {
 
     // ----- changing ----------------------------------------------------------------
 
-    pub(super) fn set_limit(&mut self, kind: TaskKind, limit: usize, cx: &mut Context<Self>) {
-        self.list.set_limit(kind, limit);
+    /// Run `limit` tasks of `kind` at once, and remember it in the settings.
+    /// It applies even when the settings cannot be saved.
+    pub(super) fn change_limit(kind: TaskKind, limit: usize, cx: &mut App) -> Result<(), String> {
+        let mut settings = RepoHub::global(cx).read(cx).settings().tasks.clone();
+        settings.set_limit(kind, limit);
+        Self::global(cx).update(cx, |this, cx| this.apply_settings(&settings, cx));
+        RepoHub::global(cx)
+            .update(cx, |hub, cx| hub.set_task_settings(settings, cx))
+            .map_err(|error| format!("Could not save the settings: {error:#}"))
+    }
+
+    /// Run as many of each kind at once as `settings` say.
+    pub(super) fn apply_settings(&mut self, settings: &TaskSettings, cx: &mut Context<Self>) {
+        for kind in [TaskKind::Clone, TaskKind::Pull] {
+            self.list.set_limit(kind, settings.limit(kind));
+        }
         self.start_ready(cx);
+        cx.notify();
     }
 
     /// Queue clones, skipping those already queued. Returns the new tasks' ids.

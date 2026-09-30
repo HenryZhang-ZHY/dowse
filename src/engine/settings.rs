@@ -1,6 +1,6 @@
 //! App-wide settings, kept in `settings.json` beside the library: where
-//! indexes are kept, which a repository can override in the library, and
-//! whether dowse looks for updates.
+//! indexes are kept, which a repository can override in the library, how
+//! many clones and pulls run at once, and whether dowse looks for updates.
 
 use std::path::{Path, PathBuf};
 
@@ -9,11 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use super::index::display_path;
 use super::store;
+use super::tasks::{MAX_LIMIT, TaskKind};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "IndexSettings::is_default")]
     pub index: IndexSettings,
+    #[serde(default, skip_serializing_if = "TaskSettings::is_default")]
+    pub tasks: TaskSettings,
     #[serde(default, skip_serializing_if = "UpdateSettings::is_default")]
     pub updates: UpdateSettings,
 }
@@ -39,6 +42,16 @@ impl Settings {
                 }
                 self.index.external_dir = Some(dir);
             }
+            CLONES_KEY | PULLS_KEY => {
+                let limit = value
+                    .parse()
+                    .ok()
+                    .filter(|limit| (1..=MAX_LIMIT).contains(limit))
+                    .ok_or_else(|| {
+                        format!("{key} is a number from 1 to {MAX_LIMIT}, not {value}")
+                    })?;
+                *self.tasks.slot(task_kind(key)) = Some(limit);
+            }
             UPDATES_CHECK_KEY => {
                 self.updates.check = Some(
                     value
@@ -56,6 +69,7 @@ impl Settings {
         match key {
             LOCATION_KEY => self.index.location = None,
             EXTERNAL_DIR_KEY => self.index.external_dir = None,
+            CLONES_KEY | PULLS_KEY => *self.tasks.slot(task_kind(key)) = None,
             UPDATES_CHECK_KEY => self.updates.check = None,
             _ => return Err(unknown_key(key)),
         }
@@ -76,6 +90,16 @@ impl Settings {
                 self.index.external_dir.is_none(),
             ),
             (
+                CLONES_KEY,
+                self.tasks.limit(TaskKind::Clone).to_string(),
+                self.tasks.clones.is_none(),
+            ),
+            (
+                PULLS_KEY,
+                self.tasks.limit(TaskKind::Pull).to_string(),
+                self.tasks.pulls.is_none(),
+            ),
+            (
                 UPDATES_CHECK_KEY,
                 self.updates.check().to_string(),
                 self.updates.check.is_none(),
@@ -88,13 +112,65 @@ impl Settings {
 pub const LOCATION_KEY: &str = "index.location";
 /// The folder external indexes go under.
 pub const EXTERNAL_DIR_KEY: &str = "index.external-dir";
+/// How many clones run at once.
+pub const CLONES_KEY: &str = "tasks.clones";
+/// How many pulls run at once.
+pub const PULLS_KEY: &str = "tasks.pulls";
 /// Whether dowse looks for a new release on its own.
 pub const UPDATES_CHECK_KEY: &str = "updates.check";
 
 fn unknown_key(key: &str) -> String {
     format!(
-        "there is no setting {key}; there are {LOCATION_KEY}, {EXTERNAL_DIR_KEY} and          {UPDATES_CHECK_KEY}"
+        "there is no setting {key}; there are {LOCATION_KEY}, {EXTERNAL_DIR_KEY}, {CLONES_KEY}, {PULLS_KEY} and {UPDATES_CHECK_KEY}"
     )
+}
+
+fn task_kind(key: &str) -> TaskKind {
+    if key == CLONES_KEY {
+        TaskKind::Clone
+    } else {
+        TaskKind::Pull
+    }
+}
+
+/// How many tasks of each kind run at once. Unset, the kind's default.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clones: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulls: Option<usize>,
+}
+
+impl TaskSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// How many of `kind` run at once, from 1 to [`MAX_LIMIT`] even when the
+    /// file says otherwise.
+    pub fn limit(&self, kind: TaskKind) -> usize {
+        let limit = match kind {
+            TaskKind::Clone => self.clones,
+            TaskKind::Pull => self.pulls,
+        };
+        limit
+            .unwrap_or_else(|| kind.default_limit())
+            .clamp(1, MAX_LIMIT)
+    }
+
+    /// Run `limit` of `kind` at once; the default is left unset.
+    pub fn set_limit(&mut self, kind: TaskKind, limit: usize) {
+        let limit = limit.clamp(1, MAX_LIMIT);
+        *self.slot(kind) = (limit != kind.default_limit()).then_some(limit);
+    }
+
+    fn slot(&mut self, kind: TaskKind) -> &mut Option<usize> {
+        match kind {
+            TaskKind::Clone => &mut self.clones,
+            TaskKind::Pull => &mut self.pulls,
+        }
+    }
 }
 
 /// Whether dowse looks for updates. Unset, it does.
@@ -337,6 +413,8 @@ mod tests {
         settings
             .set(EXTERNAL_DIR_KEY, dir.to_str().unwrap())
             .unwrap();
+        settings.set(CLONES_KEY, "8").unwrap();
+        settings.set(PULLS_KEY, "2").unwrap();
         settings.set(UPDATES_CHECK_KEY, "false").unwrap();
         assert_eq!(settings.index.location, Some(IndexLocation::External));
         assert_eq!(settings.index.external_dir(), dir);
@@ -350,8 +428,42 @@ mod tests {
 
         settings.unset(LOCATION_KEY).unwrap();
         settings.unset(EXTERNAL_DIR_KEY).unwrap();
+        settings.unset(CLONES_KEY).unwrap();
+        settings.unset(PULLS_KEY).unwrap();
         settings.unset(UPDATES_CHECK_KEY).unwrap();
         assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn task_limits_are_saved_and_kept_in_range() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            settings.tasks.limit(TaskKind::Clone),
+            TaskKind::Clone.default_limit()
+        );
+
+        settings.tasks.set_limit(TaskKind::Clone, 8);
+        settings
+            .tasks
+            .set_limit(TaskKind::Pull, TaskKind::Pull.default_limit());
+        assert_eq!(settings.tasks.pulls, None, "the default is left unset");
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        settings.save(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(r#""clones": 8"#), "{text}");
+        let loaded = Settings::load(&file).unwrap();
+        assert_eq!(loaded.tasks.limit(TaskKind::Clone), 8);
+
+        assert!(settings.set(CLONES_KEY, "0").is_err());
+        assert!(settings.set(PULLS_KEY, "17").is_err());
+        assert!(settings.set(PULLS_KEY, "many").is_err());
+
+        std::fs::write(&file, r#"{"tasks": {"clones": 0, "pulls": 99}}"#).unwrap();
+        let odd = Settings::load(&file).unwrap();
+        assert_eq!(odd.tasks.limit(TaskKind::Clone), 1);
+        assert_eq!(odd.tasks.limit(TaskKind::Pull), MAX_LIMIT);
     }
 
     #[test]

@@ -32,7 +32,7 @@ use dowse::engine::github::{self, CloneMode, RemoteRepo};
 use dowse::engine::index::display_path;
 use dowse::engine::settings::IndexLocation;
 use dowse::engine::sync::Interval;
-use dowse::engine::tasks::{TaskInfo, TaskKind, TaskState};
+use dowse::engine::tasks::{MAX_LIMIT, TaskInfo, TaskKind, TaskState};
 
 /// Height of a row in the GitHub list, which is virtualized.
 const REMOTE_ROW_HEIGHT: f32 = 56.;
@@ -1573,9 +1573,8 @@ impl SearchApp {
                         .xsmall()
                         .icon(IconName::Minus)
                         .disabled(value <= 1)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            TaskHub::global(cx)
-                                .update(cx, |tasks, cx| tasks.set_limit(kind, value - 1, cx))
+                        .on_click(cx.listener(move |_, _, window, cx| {
+                            change_limit(kind, value - 1, window, cx)
                         })),
                 )
                 .child(
@@ -1590,10 +1589,9 @@ impl SearchApp {
                         .ghost()
                         .xsmall()
                         .icon(IconName::Plus)
-                        .disabled(value >= 16)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            TaskHub::global(cx)
-                                .update(cx, |tasks, cx| tasks.set_limit(kind, value + 1, cx))
+                        .disabled(value >= MAX_LIMIT)
+                        .on_click(cx.listener(move |_, _, window, cx| {
+                            change_limit(kind, value + 1, window, cx)
                         })),
                 )
         };
@@ -2073,6 +2071,15 @@ fn select_all_box(
                 })
                 .on_click(on_click)
         })
+}
+
+/// Change how many of `kind` run at once, saying so when it cannot be saved.
+fn change_limit(kind: TaskKind, limit: usize, window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::component::notification::Notification;
+    if let Err(error) = TaskHub::change_limit(kind, limit, cx) {
+        window.push_notification(Notification::error(error), cx);
+    }
 }
 
 fn location_label(location: IndexLocation) -> &'static str {

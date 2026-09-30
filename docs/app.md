@@ -87,7 +87,8 @@ cloned are marked, and can be added with a click.
 
 ## Background tasks and scheduled pulls
 
-Clones and pulls run a few at a time (4 of each unless you change it), each on a
+Clones and pulls run a few at a time (4 of each unless you change it in the Tasks
+section or with `dowse settings set tasks.clones 8`; the app remembers), each on a
 thread of its own, so the app stays usable while a large repository clones. The
 page's Tasks section shows their progress and lets you cancel, retry or clear them;
 the status bar shows what is running. Closing the last window leaves the app

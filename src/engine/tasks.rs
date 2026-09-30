@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 /// Finished tasks kept for the task list.
 pub const KEEP_FINISHED: usize = 200;
+/// The most tasks of one kind that run at once.
+pub const MAX_LIMIT: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -19,7 +19,7 @@ well. Launching the app itself with folders or `--add` is described in
 | `dowse repos pull [<repo>...] [--wait]` | Pulls repositories, or those in scope (`--here`, `-t`, `-W`). |
 | `dowse repos sync <repo>... --every <interval>` | Pulls them every `15m`, `1h`, `3d`...; `--off` stops. |
 | `dowse repos index-location <repo>... [--repo\|--external\|--default]` | Shows where repositories keep their [indexes](indexes.md#or-kept-out-of-the-way), or keeps them in their `.tgrep`, outside them, or where `index.location` says, moving them. `-q` prints only the folders: `tgrep search foo --index-path "$(dowse repos index-location api -q)"`. |
-| `dowse settings [set <key> <value>\|unset <key>]` | Shows the app's settings, or changes them: `index.location` (`repo` or `external`), `index.external-dir`, and `updates.check` (`true` or `false`, whether the app looks for a new release once a day). |
+| `dowse settings [set <key> <value>\|unset <key>]` | Shows the app's settings, or changes them: `index.location` (`repo` or `external`), `index.external-dir`, `tasks.clones` and `tasks.pulls` (how many run at once, 1 to 16), and `updates.check` (`true` or `false`, whether the app looks for a new release once a day). |
 | `dowse tasks [--wait]` | Lists the background clones and pulls; `dowse tasks cancel <id>...` or `--all` cancels them. |
 | `dowse index [--wait] [--full]` | Brings the indexes in scope up to date, reading only the files that changed; `--full` builds them again from every file. |
 | `dowse status` | Shows the running app: windows, repositories, indexing, where its settings and log are. |
