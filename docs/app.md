@@ -50,9 +50,9 @@ to add them all. Results show which repository and branch each file comes from.
 
 Drop folders on a window to add them, or a workspace file to open it. From a
 terminal, `dowse --add <folder>` adds to the running app's last focused window. On
-Windows, the repositories page can add "Add to dowse" to Explorer's folder menu,
-which does the same, and open workspace files with a double click; this writes to
-the current user's registry only when you ask.
+Windows, the repositories page's Settings section can add "Add to dowse" to
+Explorer's folder menu, which does the same, and open workspace files with a double
+click; this writes to the current user's registry only when you ask.
 
 ## The repositories page
 
@@ -62,8 +62,10 @@ takes every one shown, and the header then holds what to do) and pull them, upda
 or rebuild their indexes, add or remove tags (`-tag` removes one), set how often
 they are pulled, choose where their indexes are kept, or take them out of the
 workspace. A row opens to its tags and pull settings, and shows its index and how
-its last pull went. Back (`Alt+Left`) returns to the search, and Forward comes back
-to the page.
+its last pull went. The page's Settings section holds what applies to every
+repository: where indexes are kept unless a repository says otherwise, and on
+Windows, Explorer's menu. Back (`Alt+Left`) returns to the search, and Forward
+comes back to the page.
 
 ![The repositories page: cloned repositories with their branch, owner and mirror tags, and how many files each index holds](images/repositories-page.webp)
 
@@ -189,7 +191,7 @@ for example `code -g {file}:{line}` or `nvim-qt +{line} {file}`.
 
 The menu at the left of the title bar holds every command by kind: File (windows
 and tabs), Workspace (new, open, save, recent), Repositories (the repositories
-page, adding and cloning, pulling and indexing, background tasks), View (back and
+page, adding and cloning, pulling and indexing, background tasks, settings), View (back and
 forward, the sidebar and preview pane, the table, the theme, the command palette)
 and Help (the project on GitHub, release notes, reporting an issue,
 [updates](install.md#updates), About).

@@ -424,6 +424,13 @@ impl SearchApp {
             .keywords(&["clones", "pulls", "progress", "cancel"]),
             command(
                 "Workspace",
+                "Repository Settings",
+                Lucide::Settings,
+                |this, w, cx| this.open_section(Section::Settings, w, cx),
+            )
+            .keywords(&["index", "location", "tgrep", "explorer", "context menu"]),
+            command(
+                "Workspace",
                 "Update Indexes in Scope",
                 Lucide::RefreshCw,
                 |this, w, cx| this.on_update_index(&UpdateIndex, w, cx),

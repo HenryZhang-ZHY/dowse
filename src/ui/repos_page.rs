@@ -48,6 +48,7 @@ impl SearchApp {
             Section::Workspace => self.render_workspace_section(cx).into_any_element(),
             Section::GitHub => self.render_github_section(cx).into_any_element(),
             Section::Tasks => self.render_tasks_section(cx).into_any_element(),
+            Section::Settings => self.render_settings_section(cx).into_any_element(),
         };
         v_flex()
             .id("repositories-page")
@@ -77,8 +78,14 @@ impl SearchApp {
             } else {
                 "Tasks".to_string()
             },
+            "Settings".to_string(),
         ];
-        let icons = [Lucide::FolderGit2, Lucide::Github, Lucide::ListChecks];
+        let icons = [
+            Lucide::FolderGit2,
+            Lucide::Github,
+            Lucide::ListChecks,
+            Lucide::Settings,
+        ];
         let selected = Section::ALL
             .iter()
             .position(|section| *section == self.manager.section)
@@ -480,19 +487,33 @@ impl SearchApp {
             .child(row)
     }
 
-    /// Below the rows: what the page does, and Explorer's menu.
+    /// Below the rows: what the page does.
     fn render_workspace_notes(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .pt_4()
             .pb_6()
-            .gap_4()
             .child(
                 div()
                     .px_6()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Click a repository for its tags, pull settings and where its index is kept. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept."),
+                    .child("Click a repository for its tags, pull settings and where its index is kept. Tags such as mirror, dev or owner:alice choose what a search covers; every repository is also tagged with its branch, and sync:<interval> when dowse pulls it. Removing takes a repository out of this workspace only; its files, index and tags are kept. Where indexes are kept, and Explorer's menu, are under Settings."),
             )
+    }
+
+    // ----- settings -------------------------------------------------------------------
+
+    /// What applies to every repository rather than one: where indexes are
+    /// kept, and Explorer's menu.
+    fn render_settings_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("repositories-settings")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .pt_4()
+            .pb_6()
+            .gap_4()
             .child(self.render_index_settings(cx))
             .children(self.render_explorer_integration(cx))
     }

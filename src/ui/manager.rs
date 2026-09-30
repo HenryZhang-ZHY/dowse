@@ -31,10 +31,16 @@ pub(super) enum Section {
     Workspace,
     GitHub,
     Tasks,
+    Settings,
 }
 
 impl Section {
-    pub(super) const ALL: [Section; 3] = [Section::Workspace, Section::GitHub, Section::Tasks];
+    pub(super) const ALL: [Section; 4] = [
+        Section::Workspace,
+        Section::GitHub,
+        Section::Tasks,
+        Section::Settings,
+    ];
 }
 
 /// The repositories page of one window.

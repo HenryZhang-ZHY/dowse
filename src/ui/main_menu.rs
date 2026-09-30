@@ -225,6 +225,9 @@ fn repositories_menu(menu: PopupMenu, app: &WeakEntity<SearchApp>) -> PopupMenu 
     .item(command(app, "Background Tasks", None, |this, w, cx| {
         this.open_section(Section::Tasks, w, cx)
     }))
+    .item(command(app, "Repository Settings", None, |this, w, cx| {
+        this.open_section(Section::Settings, w, cx)
+    }))
 }
 
 fn view_menu(
