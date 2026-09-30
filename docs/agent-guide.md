@@ -93,6 +93,9 @@ dowse repos add ~/mirrors                    # a folder of repositories adds eac
 dowse repos tag api owner:alice -r mirror    # add owner:alice, remove mirror
 dowse index --here --wait                    # update an index and wait
 dowse index --here --full                    # rebuild it from every file
+dowse repos index-location api              # where its index is kept
+dowse repos index-location api --external   # keep it outside the repository
+dowse settings                               # the app's settings
 dowse status                                 # the app, its windows and indexing
 ```
 

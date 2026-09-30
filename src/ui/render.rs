@@ -1348,7 +1348,7 @@ impl SearchApp {
                     .max_w(px(560.))
                     .text_center()
                     .text_color(muted)
-                    .child("Add the repositories you work with. Each gets a trigram index in its .tgrep directory, shared with the tgrep command-line tool. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
+                    .child("Add the repositories you work with. Each gets a trigram index, in its .tgrep directory to share with the tgrep command-line tool, or outside it if you clean your working copies. Tag them, e.g. mirror, dev or owner:alice, to choose which ones a search covers."),
             )
             .child(
                 h_flex()
