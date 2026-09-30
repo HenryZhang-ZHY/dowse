@@ -22,9 +22,11 @@ pub struct ChangeTracker {
 
 struct State {
     root: PathBuf,
-    /// Changed path -> epoch of its latest change.
-    changed: Mutex<BTreeMap<String, u64>>,
+    /// Changed path -> its latest change.
+    changed: Mutex<BTreeMap<String, Stamp>>,
     epoch: AtomicU64,
+    /// Numbers every change, so a newer change of a file is told apart.
+    version: AtomicU64,
     /// Built on a background thread at start; events wait for it.
     ignore: OnceLock<Option<IgnoreMatcher>>,
 }
@@ -33,6 +35,23 @@ struct State {
 #[derive(Clone, Copy, Debug)]
 pub struct ChangeMark(u64);
 
+/// A file changed since the last completed index build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    /// Repository-relative, `/`-separated.
+    pub path: String,
+    /// Grows with every change recorded, so a file whose version moved on
+    /// has changed again.
+    pub version: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Stamp {
+    /// The build epoch the change was recorded in.
+    epoch: u64,
+    version: u64,
+}
+
 impl ChangeTracker {
     /// Watch `root`, which must be canonical (as [`super::index::RepoIndex`] keeps it).
     pub fn start(root: &Path) -> notify::Result<Self> {
@@ -40,6 +59,7 @@ impl ChangeTracker {
             root: root.to_path_buf(),
             changed: Mutex::new(BTreeMap::new()),
             epoch: AtomicU64::new(0),
+            version: AtomicU64::new(0),
             ignore: OnceLock::new(),
         });
         let handler_state = state.clone();
@@ -64,14 +84,24 @@ impl ChangeTracker {
         self.state.changed.lock().unwrap().keys().cloned().collect()
     }
 
+    /// The files changed since the last completed index build, by path.
+    pub fn changes(&self) -> Vec<Change> {
+        self.state
+            .changed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(path, stamp)| Change {
+                path: path.clone(),
+                version: stamp.version,
+            })
+            .collect()
+    }
+
     /// Count these repository-relative paths as changed, as if the watcher
     /// had seen them: files that changed while nothing watched.
     pub fn note(&self, paths: Vec<String>) {
-        let epoch = self.state.epoch.load(Ordering::SeqCst);
-        let mut changed = self.state.changed.lock().unwrap();
-        for path in paths {
-            changed.insert(path, epoch);
-        }
+        self.state.insert(paths);
     }
 
     pub fn changed_count(&self) -> usize {
@@ -91,7 +121,7 @@ impl ChangeTracker {
             .changed
             .lock()
             .unwrap()
-            .retain(|_, epoch| *epoch > mark.0);
+            .retain(|_, stamp| stamp.epoch > mark.0);
     }
 }
 
@@ -124,15 +154,20 @@ impl State {
                 found.push(relative);
             }
         }
-        if found.is_empty() {
+        self.insert(found);
+    }
+
+    fn insert(&self, paths: Vec<String>) {
+        if paths.is_empty() {
             return;
         }
         // A change recorded before `mark()` carries that mark's epoch and is
         // forgotten once the build finishes; the build started after it.
         let epoch = self.epoch.load(Ordering::SeqCst);
         let mut changed = self.changed.lock().unwrap();
-        for relative in found {
-            changed.insert(relative, epoch);
+        for path in paths {
+            let version = self.version.fetch_add(1, Ordering::SeqCst);
+            changed.insert(path, Stamp { epoch, version });
         }
     }
 
@@ -190,6 +225,23 @@ mod tests {
         let mark = tracker.mark();
         tracker.forget_before(mark);
         assert_eq!(tracker.changed_count(), 0);
+    }
+
+    #[test]
+    fn each_change_of_a_file_gets_a_newer_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let tracker = ChangeTracker::start(&root).unwrap();
+        tracker.note(vec!["b.md".into(), "a.rs".into()]);
+        let first = tracker.changes();
+        assert_eq!(
+            first.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+            ["a.rs", "b.md"]
+        );
+        tracker.note(vec!["a.rs".into()]);
+        let second = tracker.changes();
+        assert!(second[0].version > first[0].version);
+        assert_eq!(second[1], first[1]);
     }
 
     #[test]
