@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::settings::IndexLocation;
 use super::sync::Interval;
 use super::{repo, store};
 
@@ -30,6 +31,9 @@ pub struct LibraryEntry {
     /// When dowse last tried to pull it, in seconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pulled_at: Option<u64>,
+    /// Where its index is kept; the app's setting when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_location: Option<IndexLocation>,
 }
 
 impl LibraryEntry {
@@ -66,6 +70,7 @@ impl Library {
             tags: Vec::new(),
             pull_every: None,
             pulled_at: None,
+            index_location: None,
         });
         true
     }
@@ -83,6 +88,18 @@ impl Library {
         match self.repos.iter_mut().find(|entry| entry.path == path) {
             Some(entry) if entry.pull_every != every => {
                 entry.pull_every = every;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Keep the repository's index at `location`, or where the app's setting
+    /// says with `None`. Returns `true` when that changed.
+    pub fn set_index_location(&mut self, path: &Path, location: Option<IndexLocation>) -> bool {
+        match self.repos.iter_mut().find(|entry| entry.path == path) {
+            Some(entry) if entry.index_location != location => {
+                entry.index_location = location;
                 true
             }
             _ => false,
@@ -132,6 +149,10 @@ mod tests {
         let hourly = "1h".parse().ok();
         assert!(library.set_pull_every(Path::new("/m/api"), hourly));
         assert!(!library.set_pull_every(Path::new("/m/api"), hourly));
+        let external = Some(IndexLocation::External);
+        assert!(library.set_index_location(Path::new("/dev/api"), external));
+        assert!(!library.set_index_location(Path::new("/dev/api"), external));
+        assert!(!library.set_index_location(Path::new("/nowhere"), external));
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         library.set_pulled_at(Path::new("/m/api"), now);
         assert_eq!(library.repos[0].pulled_at(), Some(now));
@@ -145,6 +166,8 @@ mod tests {
             1,
             "unset fields stay out"
         );
+        assert!(text.contains(r#""index_location": "external""#), "{text}");
+        assert_eq!(text.matches("index_location").count(), 1);
 
         assert!(library.remove(Path::new("/m/api")));
         assert!(!library.remove(Path::new("/m/api")));

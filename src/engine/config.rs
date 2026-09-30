@@ -38,6 +38,11 @@ impl ConfigDir {
         self.root.join("library.json")
     }
 
+    /// App-wide settings, such as where indexes are kept.
+    pub fn settings_file(&self) -> PathBuf {
+        self.root.join("settings.json")
+    }
+
     /// The windows to restore and recently opened workspaces.
     pub fn session_file(&self) -> PathBuf {
         self.root.join("session.json")

@@ -644,6 +644,7 @@ mod tests {
                 tags: tags.iter().map(|tag| tag.to_string()).collect(),
                 pull_every: None,
                 pulled_at: None,
+                index_location: None,
             }
         };
         let library = Library {

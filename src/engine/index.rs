@@ -19,6 +19,7 @@ use tgrep_core::trigram::{self, TrigramMaskMap};
 use tgrep_core::visibility::{self, PathVisibility};
 use tgrep_core::walker::{self, FileMeta, MetaWalkOptions, MetaWalkResult, WalkOptions};
 
+use super::settings::{self, IndexPlace};
 use super::watch::Change;
 
 /// How [`RepoIndex::update_index`] brought an index up to date.
@@ -60,12 +61,57 @@ impl FileChanges {
     }
 }
 
-/// A searchable folder and its index. The index lives in `<root>/.tgrep`, the same
-/// place `tgrep index` and `tgrep serve` use, so the GUI and the CLI share it.
+/// A searchable folder and its index. By default the index lives in
+/// `<root>/.tgrep`, the same place `tgrep index` and `tgrep serve` use, so
+/// the GUI and the CLI share it; it can live outside the folder instead (see
+/// [`IndexPlace`]), which tgrep reaches with `--index-path`.
 #[derive(Clone, Debug)]
 pub struct RepoIndex {
     root: PathBuf,
     index_dir: PathBuf,
+}
+
+/// What [`RepoIndex::move_from`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IndexMove {
+    /// There was no index at the old place.
+    NothingToMove,
+    Moved,
+    /// The new place already had a usable index, so the old one was removed.
+    AlreadyThere,
+    /// The index could not be moved, for this reason, and stays where it was.
+    Kept(String),
+}
+
+/// Remove the indexes under `external_dir` whose folders are gone: those of
+/// repositories deleted or moved elsewhere. A folder counts as gone only when
+/// its parent is still there, so the indexes of repositories on a drive or
+/// share that is not connected right now are kept. Returns the index folders
+/// removed.
+pub fn remove_orphaned_indexes(external_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(external_dir) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for dir in entries.filter_map(|entry| entry.ok().map(|entry| entry.path())) {
+        let Ok(meta) = IndexMeta::load(&dir) else {
+            continue;
+        };
+        let root = Path::new(&meta.root_path);
+        let gone =
+            !meta.root_path.is_empty() && !root.exists() && root.parent().is_some_and(Path::is_dir);
+        if !gone {
+            continue;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => removed.push(dir),
+            Err(error) => log::warn!(
+                "could not remove the orphaned index {}: {error}",
+                display_path(&dir)
+            ),
+        }
+    }
+    removed
 }
 
 /// Whether the on-disk index can answer searches.
@@ -81,12 +127,80 @@ pub enum IndexStatus {
 }
 
 impl RepoIndex {
+    /// Open the folder with its index in `<root>/.tgrep`.
     pub fn open(root: &Path) -> Result<Self> {
+        Self::open_in(root, &IndexPlace::Repo)
+    }
+
+    /// Open the folder with its index where `place` says.
+    pub fn open_in(root: &Path, place: &IndexPlace) -> Result<Self> {
         let root = std::fs::canonicalize(root)
             .with_context(|| format!("cannot open folder {}", root.display()))?;
         anyhow::ensure!(root.is_dir(), "{} is not a folder", display_path(&root));
-        let index_dir = builder::default_index_dir(&root);
+        let index_dir = match place {
+            IndexPlace::Repo => builder::default_index_dir(&root),
+            IndexPlace::External(dir) => settings::external_index_dir(dir, &root),
+        };
         Ok(Self { root, index_dir })
+    }
+
+    /// Where the index is, or will be once built.
+    pub fn index_dir(&self) -> &Path {
+        &self.index_dir
+    }
+
+    /// Whether the published index is still on disk. It goes when something
+    /// deletes it behind dowse's back, such as a clean of ignored files that
+    /// takes `.tgrep` along.
+    pub fn index_exists(&self) -> bool {
+        self.index_dir.join(META_FILE).is_file()
+    }
+
+    /// Move the folder's index here from where `old` keeps it, so that
+    /// changing where indexes live needs no rebuild. When this place already
+    /// has a usable index, the old one is removed instead.
+    ///
+    /// Every [`Corpus`] reading either index must be dropped first: Windows
+    /// refuses to move files that are memory-mapped.
+    pub fn move_from(&self, old: &RepoIndex) -> IndexMove {
+        if old.index_dir == self.index_dir || !old.index_dir.exists() {
+            return IndexMove::NothingToMove;
+        }
+        if matches!(self.index_status(), IndexStatus::Ready { .. }) {
+            if let Err(error) = std::fs::remove_dir_all(&old.index_dir) {
+                log::warn!(
+                    "could not remove the old index {}: {error}",
+                    display_path(&old.index_dir)
+                );
+            }
+            return IndexMove::AlreadyThere;
+        }
+        let kept =
+            |what: String, error: std::io::Error| IndexMove::Kept(format!("{what}: {error}"));
+        if self.index_dir.exists()
+            && let Err(error) = std::fs::remove_dir_all(&self.index_dir)
+        {
+            return kept(
+                format!("cannot clear {}", display_path(&self.index_dir)),
+                error,
+            );
+        }
+        if let Some(parent) = self.index_dir.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            return kept(format!("cannot create {}", display_path(parent)), error);
+        }
+        match std::fs::rename(&old.index_dir, &self.index_dir) {
+            Ok(()) => IndexMove::Moved,
+            Err(error) => kept(
+                format!(
+                    "cannot move {} to {}",
+                    display_path(&old.index_dir),
+                    display_path(&self.index_dir)
+                ),
+                error,
+            ),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -870,6 +984,115 @@ mod tests {
                 .iter()
                 .all(|p| !p.starts_with('.'))
         );
+    }
+
+    fn is_ready(index: &RepoIndex) -> bool {
+        matches!(index.index_status(), IndexStatus::Ready { .. })
+    }
+
+    #[test]
+    fn an_external_index_leaves_the_folder_alone() {
+        let dir = tree();
+        let external = tempfile::tempdir().unwrap();
+        let place = IndexPlace::External(external.path().to_path_buf());
+        let index = RepoIndex::open_in(dir.path(), &place).unwrap();
+        assert!(index.index_dir().starts_with(external.path()));
+        assert!(!index.index_exists());
+
+        index.build_index().unwrap().publish().unwrap();
+        assert!(index.index_exists());
+        assert!(matches!(
+            index.index_status(),
+            IndexStatus::Ready { files: 2, .. }
+        ));
+        assert!(!dir.path().join(".tgrep").exists());
+        assert_eq!(candidates(&index, "needle_here"), vec!["src/lib.rs"]);
+
+        std::fs::write(dir.path().join("src/new.rs"), "fn added_later() {}\n").unwrap();
+        let update = index.update_index().unwrap();
+        assert!(matches!(update, IndexUpdate::Merged { .. }));
+        update.into_staged().unwrap().publish().unwrap();
+        assert_eq!(candidates(&index, "added_later"), vec!["src/new.rs"]);
+
+        std::fs::remove_dir_all(index.index_dir()).unwrap();
+        assert!(!index.index_exists());
+    }
+
+    #[test]
+    fn moving_an_index_there_and_back_keeps_it_usable() {
+        let dir = tree();
+        let external = tempfile::tempdir().unwrap();
+        let inside = RepoIndex::open(dir.path()).unwrap();
+        let outside =
+            RepoIndex::open_in(dir.path(), &IndexPlace::External(external.path().into())).unwrap();
+        assert_eq!(outside.move_from(&inside), IndexMove::NothingToMove);
+
+        inside.build_index().unwrap().publish().unwrap();
+        assert_eq!(outside.move_from(&inside), IndexMove::Moved);
+        assert!(!dir.path().join(".tgrep").exists());
+        assert!(is_ready(&outside));
+        assert_eq!(candidates(&outside, "needle_here"), vec!["src/lib.rs"]);
+
+        assert_eq!(inside.move_from(&outside), IndexMove::Moved);
+        assert!(!outside.index_dir().exists());
+        assert!(is_ready(&inside));
+    }
+
+    #[test]
+    fn moving_onto_a_usable_index_removes_the_old_one() {
+        let dir = tree();
+        let external = tempfile::tempdir().unwrap();
+        let inside = RepoIndex::open(dir.path()).unwrap();
+        let outside =
+            RepoIndex::open_in(dir.path(), &IndexPlace::External(external.path().into())).unwrap();
+        inside.build_index().unwrap().publish().unwrap();
+        outside.build_index().unwrap().publish().unwrap();
+
+        assert_eq!(outside.move_from(&inside), IndexMove::AlreadyThere);
+        assert!(!inside.index_dir().exists());
+        assert!(is_ready(&outside));
+    }
+
+    #[test]
+    fn an_index_that_cannot_be_moved_stays_where_it_was() {
+        let dir = tree();
+        let blocked = tempfile::tempdir().unwrap();
+        // A file where the external folder should be.
+        let external = blocked.path().join("indexes");
+        std::fs::write(&external, "").unwrap();
+        let inside = RepoIndex::open(dir.path()).unwrap();
+        let outside = RepoIndex::open_in(dir.path(), &IndexPlace::External(external)).unwrap();
+        inside.build_index().unwrap().publish().unwrap();
+
+        assert!(matches!(outside.move_from(&inside), IndexMove::Kept(_)));
+        assert!(is_ready(&inside));
+    }
+
+    #[test]
+    fn removes_the_external_indexes_of_folders_that_are_gone() {
+        let parent = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let place = IndexPlace::External(external.path().into());
+        let mut dirs = Vec::new();
+        for name in ["kept", "deleted"] {
+            let root = parent.path().join(name);
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            std::fs::write(root.join("src/lib.rs"), "fn f() {}\n").unwrap();
+            let index = RepoIndex::open_in(&root, &place).unwrap();
+            index.build_index().unwrap().publish().unwrap();
+            dirs.push(index.index_dir().to_path_buf());
+        }
+        // Not an index: left alone.
+        std::fs::create_dir_all(external.path().join("notes")).unwrap();
+        std::fs::remove_dir_all(parent.path().join("deleted")).unwrap();
+
+        assert_eq!(
+            remove_orphaned_indexes(external.path()),
+            vec![dirs[1].clone()]
+        );
+        assert!(dirs[0].exists());
+        assert!(external.path().join("notes").exists());
+        assert!(remove_orphaned_indexes(external.path()).is_empty());
     }
 
     fn candidates(index: &RepoIndex, literal: &str) -> Vec<String> {

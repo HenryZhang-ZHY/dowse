@@ -15,6 +15,7 @@ pub mod query;
 pub mod repo;
 pub mod search;
 pub mod session;
+pub mod settings;
 mod store;
 pub mod sync;
 pub mod syntax;
