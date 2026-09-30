@@ -212,6 +212,13 @@ facet narrows them to Rust, and the table lays them out one row per line.
   index load, build and update timings, log problems) and the latest searches with what each
   read and found. Copy Diagnostics puts it all on the clipboard. The command line
   reads the same with `dowse dev logs` and `dowse dev metrics`.
+- **Updates itself.** Once a day while it runs, dowse asks GitHub for its latest
+  release; a newer one shows in the status bar with its release notes. Install
+  downloads this platform's archive, checks it against the SHA-256 GitHub keeps for
+  it, makes sure the new program starts, and puts it in place of the running one;
+  Restart Now brings the same windows back in the new version. Help > Check for
+  Updates… asks at once, Skip This Version stops offering one release, and Help >
+  Check for Updates Automatically turns the daily question off.
 - **Command palette**: `Ctrl+K` (`Cmd+K` on macOS; `Ctrl+Shift+P` also works), or the
   `⋮` menu at the right of the title bar, lists every command with its shortcut,
   plus the open tabs, the scope's tags, recent
@@ -246,6 +253,13 @@ quarantine flag the browser set:
 ```bash
 xattr -dr com.apple.quarantine /Applications/dowse.app
 ```
+
+Later versions install from the app (see Updates itself, above), which replaces the
+programs where they are, so keep them in a folder you can write to. When dowse
+cannot write there (Program Files, say), or macOS runs `dowse.app` from a read-only
+copy because it was never moved to Applications, the dialog says so and links the
+release page instead. Only the builds released here look for updates on their own;
+one built from source does not.
 
 ## Build and run
 
@@ -344,8 +358,8 @@ On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see 
 
 | Path | What it holds |
 | --- | --- |
-| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `github.rs` lists and clones GitHub repositories through `gh`; `sync.rs` pulls a repository when it is safe to and parses pull intervals; `tasks.rs` queues background tasks; `process.rs` runs git and gh. `index.rs` opens, builds, updates and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names, tags and settings, `settings.rs` the app's settings, such as where indexes are kept, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings. |
-| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `history.rs` their back and forward, `main_menu.rs` the title bar's menu, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page, `repos_page.rs` the repositories page and `manager.rs` its state; `tasks.rs` runs clones and pulls and pulls on schedule; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `devtools.rs` is the developer tools window. |
+| `src/engine/` | The search engine and saved settings, a library with no UI dependency. `github.rs` lists and clones GitHub repositories through `gh`; `sync.rs` pulls a repository when it is safe to and parses pull intervals; `tasks.rs` queues background tasks; `process.rs` runs git and gh. `index.rs` opens, builds, updates and publishes one repository's tgrep index; `repo.rs` holds repository metadata, tags, the scope and branch detection; `syntax.rs` parses the query language; `query.rs` compiles it and the path filter; `search.rs` narrows candidates through each index and matches lines in parallel; `facets.rs` counts and filters results; `table.rs` lays results out as rows, sorts and exports them; `preview.rs` prepares a whole file for the preview; `watch.rs` tracks changed files. `library.rs` keeps repository names, tags and settings, `settings.rs` the app's settings, such as where indexes are kept, `workspace.rs` reads and writes workspace files, `session.rs` the windows to restore, and `config.rs` locates the settings. `update/` keeps dowse up to date: `release.rs` reads GitHub's releases, `client.rs` asks for the latest, `state.rs` remembers the answer and the user's choices in `update.json`, and `install.rs` downloads, checks and installs a release over the running one. |
+| `src/ui/` | The GPUI views: `windows.rs` opens, restores and remembers windows; `hub.rs` holds the repositories every window shares (their indexes, file watchers and the build queue); `app.rs` a window's searching, `tabs.rs` its search tabs, `history.rs` their back and forward, `main_menu.rs` the title bar's menu, `workspace.rs` its workspace, `repos.rs` its repositories and scope; `render.rs` the search page, `repos_page.rs` the repositories page and `manager.rs` its state; `tasks.rs` runs clones and pulls and pulls on schedule; `preview.rs` the preview pane; `table.rs` the table view and exports; `palette.rs` the command palette; `highlight.rs` colours code by language; `remote.rs` answers the command line; `updates.rs` looks for, offers and installs updates; `devtools.rs` is the developer tools window. |
 | `src/cli/` | The `dowse` subcommands: `args.rs` their options, `client.rs` reaching the running app (starting it in the background when need be), `output.rs` formatting its answers as text or JSON. |
 | `src/ipc/` | Keeping to one running app, and how the command line talks to it: later launches and subcommands send a JSON line over a local socket and read JSON lines back (`protocol.rs`). |
 | `src/diagnostics/` | The log (a ring buffer and a rotating file) and the metrics, with no UI dependency. |
@@ -384,7 +398,9 @@ queries finish in 20–60 ms.
 cargo test
 ```
 
-The engine tests build real indexes in temporary directories.
+The engine tests build real indexes in temporary directories. Two tests ask the
+real GitHub, so they only run when asked: `cargo test -- --ignored` checks the
+latest release and installs it into a temporary folder.
 
 ## Releasing
 
@@ -397,6 +413,11 @@ git tag v1.0.0 && git push origin v1.0.0
 The release workflow builds every platform's archive and publishes them as the
 tag's release. Running the workflow by hand from the Actions tab builds the same
 archives as workflow artifacts, without releasing, to try them first.
+
+A published release is what running copies update to, found by its `v<version>`
+tag and its archive for each platform (`dowse-<tag>-<platform>.<ext>`), so keep
+those names. The workflow sets `DOWSE_RELEASE`, which lets its builds look for
+updates on their own.
 
 ## License
 
