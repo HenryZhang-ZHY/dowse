@@ -73,7 +73,8 @@ pub(super) struct History {
     forward: Vec<Entry>,
     /// The query shown, once it has settled.
     settled: Option<SearchQuery>,
-    settle_task: Option<Task<()>>,
+    /// The query waiting to settle, and the wait.
+    settle_task: Option<(SearchQuery, Task<()>)>,
 }
 
 impl History {
@@ -186,8 +187,18 @@ impl SearchApp {
             tab.history.settle_task = None;
             return;
         }
-        let (tab_id, query) = (tab.id, query.clone());
-        tab.history.settle_task = Some(cx.spawn(async move |this, cx| {
+        // Searching again for the same query, as when an index changes under
+        // it, keeps waiting from the first time.
+        if tab
+            .history
+            .settle_task
+            .as_ref()
+            .is_some_and(|(waiting, _)| waiting == query)
+        {
+            return;
+        }
+        let (tab_id, waiting, query) = (tab.id, query.clone(), query.clone());
+        let task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SETTLE_AFTER).await;
             this.update(cx, |this, cx| {
                 let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) else {
@@ -198,7 +209,8 @@ impl SearchApp {
                 }
             })
             .ok();
-        }));
+        });
+        self.tab_mut().history.settle_task = Some((waiting, task));
     }
 
     /// The current search counts as a step now, without waiting for a pause.

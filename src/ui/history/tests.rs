@@ -328,3 +328,29 @@ fn previewing_while_typing_is_part_of_the_same_step(cx: &mut TestAppContext) {
     pick(&app, &repo, "a.txt", 1, cx);
     assert_eq!(can_go(&app, cx), (false, false));
 }
+
+#[gpui::test]
+fn searching_again_in_the_background_does_not_delay_the_step(cx: &mut TestAppContext) {
+    let (app, cx) = open(cx);
+    type_query(&app, "foo", cx);
+    for _ in 0..3 {
+        cx.executor().advance_clock(SETTLE_AFTER / 2);
+        // As when an index changes under the search.
+        app.update(cx, |this, cx| this.schedule_search(true, cx));
+    }
+    cx.run_until_parked();
+    type_query(&app, "bar", cx);
+    assert_eq!(can_go(&app, cx), (true, false));
+}
+
+#[gpui::test]
+fn each_keystroke_waits_again(cx: &mut TestAppContext) {
+    let (app, cx) = open(cx);
+    type_query(&app, "f", cx);
+    cx.executor().advance_clock(SETTLE_AFTER / 2);
+    type_query(&app, "fo", cx);
+    cx.executor().advance_clock(SETTLE_AFTER / 2);
+    cx.run_until_parked();
+    type_query(&app, "x", cx);
+    assert_eq!(can_go(&app, cx), (false, false));
+}
