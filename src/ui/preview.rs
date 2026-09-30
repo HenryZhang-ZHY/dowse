@@ -31,12 +31,29 @@ pub(super) struct Preview {
     /// Relative to the repository root, `/`-separated.
     pub(super) path: String,
     pub(super) language: Option<&'static str>,
-    /// The requested line until the editor's native cursor takes over.
-    line: usize,
     pub(super) state: PreviewState,
     editor: Option<PreviewEditor>,
-    reveal: bool,
+    target: Option<RevealTarget>,
     task: Option<Task<()>>,
+}
+
+#[derive(Clone, Copy)]
+enum RevealTarget {
+    Line(usize),
+    Offset(usize),
+    FirstMatch,
+    LastMatch,
+}
+
+impl RevealTarget {
+    fn offset(self, file: &FilePreview) -> usize {
+        match self {
+            Self::Line(line) => file.match_offset(line),
+            Self::Offset(offset) => offset.min(file.text.len()),
+            Self::FirstMatch => file.matches.first().copied().unwrap_or(0),
+            Self::LastMatch => file.matches.last().copied().unwrap_or(0),
+        }
+    }
 }
 
 pub(super) enum PreviewState {
@@ -70,18 +87,45 @@ impl Preview {
     }
 
     pub(super) fn current_line(&self, cx: &App) -> usize {
-        match &self.editor {
-            Some(editor) if !self.reveal => {
-                editor.state.read(cx).cursor_position().line as usize + 1
-            }
-            _ => self.line,
+        if self.target.is_none()
+            && let Some(editor) = &self.editor
+        {
+            return editor.state.read(cx).cursor_position().line as usize + 1;
         }
+        match self.loaded() {
+            Some(file) => file.line_at_offset(self.current_offset(cx)),
+            None => match self.target {
+                Some(RevealTarget::Line(line)) => line,
+                _ => 1,
+            },
+        }
+    }
+
+    pub(super) fn current_offset(&self, cx: &App) -> usize {
+        if let (Some(target), Some(file)) = (self.target, self.loaded()) {
+            return target.offset(file);
+        }
+        self.editor
+            .as_ref()
+            .map(|editor| editor.state.read(cx).cursor())
+            .unwrap_or(0)
     }
 
     /// Let the editor reveal `line` using its native cursor scrolling.
     fn select(&mut self, line: usize) {
-        self.line = line;
-        self.reveal = true;
+        self.target = Some(RevealTarget::Line(line));
+    }
+
+    pub(super) fn select_match(&mut self, offset: usize) {
+        self.target = Some(RevealTarget::Offset(offset));
+    }
+
+    fn select_edge(&mut self, forward: bool) {
+        self.target = Some(if forward {
+            RevealTarget::FirstMatch
+        } else {
+            RevealTarget::LastMatch
+        });
     }
 
     fn ensure_editor<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
@@ -113,22 +157,22 @@ impl Preview {
                 style,
                 _subscription: subscription,
             });
-            self.reveal = true;
         }
         let editor = self
             .editor
             .as_mut()
             .expect("preview editor was initialized");
         if !Arc::ptr_eq(&editor.file.text, &file.text) {
-            if !self.reveal {
-                self.line = editor.state.read(cx).cursor_position().line as usize + 1;
+            if self.target.is_none() {
+                self.target = Some(RevealTarget::Line(
+                    editor.state.read(cx).cursor_position().line as usize + 1,
+                ));
             }
             editor.state.update(cx, |state, cx| {
                 state.set_value(SharedString::new(file.text.clone()), window, cx);
             });
-            self.reveal = true;
         }
-        if !Arc::ptr_eq(&editor.file, &file) || editor.style != style || self.reveal {
+        if !Arc::ptr_eq(&editor.file, &file) || editor.style != style || self.target.is_some() {
             editor.decorations.set(
                 file.highlights
                     .iter()
@@ -139,13 +183,14 @@ impl Preview {
             editor.file = file.clone();
             editor.style = style;
         }
-        if self.reveal && editor.state.read(cx).line_height().is_some() {
-            self.line = self.line.clamp(1, file.line_starts.len());
-            let offset = file.line_offset(self.line);
+        if let Some(target) = self.target
+            && editor.state.read(cx).line_height().is_some()
+        {
+            let offset = target.offset(&file);
             editor.state.update(cx, |state, cx| {
                 state.set_selected_range(offset..offset, cx);
             });
-            self.reveal = false;
+            self.target = None;
         }
     }
 }
@@ -175,10 +220,9 @@ impl SearchApp {
             repo,
             path,
             language,
-            line,
             state: PreviewState::Loading,
             editor: None,
-            reveal: true,
+            target: Some(RevealTarget::Line(line)),
             task: None,
         });
         self.load_preview(self.active_tab, true, cx);
@@ -195,8 +239,9 @@ impl SearchApp {
         let Some(preview) = tab.preview.as_mut() else {
             return;
         };
-        // This load replaces one that may still be on its way to the line.
-        preview.reveal |= reveal || matches!(preview.state, PreviewState::Loading);
+        if reveal && preview.target.is_none() {
+            preview.select(preview.current_line(cx));
+        }
         let file = full_path(&preview.repo.root, &preview.path);
         let previous = preview.loaded().cloned();
         let (repo, path) = (preview.repo.clone(), preview.path.clone());
@@ -222,10 +267,7 @@ impl SearchApp {
                     return;
                 };
                 preview.state = match loaded {
-                    Ok(loaded) => {
-                        preview.line = preview.line.clamp(1, loaded.line_starts.len());
-                        PreviewState::Ready(Arc::new(loaded))
-                    }
+                    Ok(loaded) => PreviewState::Ready(Arc::new(loaded)),
                     Err(error) => PreviewState::Failed(error),
                 };
                 cx.notify();
@@ -252,11 +294,11 @@ impl SearchApp {
     /// Go to the next (or previous) match: within the previewed file, then
     /// on to the neighbouring result file, wrapping around.
     pub(super) fn step_match(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let line = self
+        let offset = self
             .tab()
             .preview
             .as_ref()
-            .map(|preview| preview.current_line(cx));
+            .map(|preview| preview.current_offset(cx));
         let tab = self.tab_mut();
         let Some(results) = tab.results.as_ref() else {
             return;
@@ -273,15 +315,15 @@ impl SearchApp {
                 // Still loading; its matches are not known yet.
                 return;
             };
-            let target = line.and_then(|line| {
+            let target = offset.and_then(|offset| {
                 if forward {
-                    loaded.next_match(line)
+                    loaded.next_match(offset)
                 } else {
-                    loaded.previous_match(line)
+                    loaded.previous_match(offset)
                 }
             });
-            if let Some(line) = target {
-                preview.select(line);
+            if let Some(offset) = target {
+                preview.select_match(offset);
                 cx.notify();
                 return;
             }
@@ -295,20 +337,12 @@ impl SearchApp {
         let Some(file) = results.file(next) else {
             return;
         };
-        let line = if forward {
-            file.first_match_line()
-        } else {
-            file.snippets
-                .iter()
-                .rev()
-                .flat_map(|snippet| snippet.lines.iter().rev())
-                .find(|line| line.is_match)
-                .map(|line| line.number)
-        }
-        .unwrap_or(1);
         let (repo, path, language) = (file.repo.clone(), file.path.clone(), file.language);
         tab.list_state.scroll_to_reveal_item(next);
-        self.preview_hit(repo, path, language, line, cx);
+        self.preview_hit(repo, path, language, 1, cx);
+        if let Some(preview) = self.tab_mut().preview.as_mut() {
+            preview.select_edge(forward);
+        }
     }
 
     /// Open the previewed file in the external editor at the native cursor.
@@ -407,7 +441,7 @@ impl SearchApp {
             .filter(|loaded| !loaded.matches.is_empty())
             .map(|loaded| {
                 let total = loaded.matches.len();
-                let position = match loaded.match_ordinal(line) {
+                let position = match loaded.match_ordinal(preview.current_offset(cx)) {
                     Some(ordinal) => format!("{ordinal} of {}", format::count(total)),
                     None => format::plural(total, "match", "matches"),
                 };

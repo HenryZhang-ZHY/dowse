@@ -14,7 +14,7 @@ pub struct FilePreview {
     pub text: Arc<str>,
     /// UTF-8 byte offsets of logical lines, including a trailing empty line.
     pub line_starts: Vec<usize>,
-    /// 0-based indexes of the lines the query matches, in order.
+    /// UTF-8 byte offsets of every query match, including zero-width matches.
     pub matches: Vec<usize>,
     /// Query matches in the original source's UTF-8 byte coordinates.
     pub highlights: Vec<Range<usize>>,
@@ -56,15 +56,12 @@ impl FilePreview {
                 let line = &self.text[start..end];
                 let line = line.strip_suffix('\n').unwrap_or(line);
                 let line = line.strip_suffix('\r').unwrap_or(line);
-                let first = self.highlights.len();
-                self.highlights.extend(
-                    matcher
-                        .find_iter(line)
-                        .filter(|m| !m.is_empty())
-                        .map(|m| start + m.start()..start + m.end()),
-                );
-                if self.highlights.len() != first || matcher.is_match(line) {
-                    self.matches.push(index);
+                for found in matcher.find_iter(line) {
+                    let range = start + found.start()..start + found.end();
+                    self.matches.push(range.start);
+                    if !range.is_empty() {
+                        self.highlights.push(range);
+                    }
                 }
             }
         }
@@ -74,22 +71,37 @@ impl FilePreview {
         self.line_starts[line.saturating_sub(1).min(self.line_starts.len() - 1)]
     }
 
-    /// The first match after the 1-based `line`, as a 1-based line.
-    pub fn next_match(&self, line: usize) -> Option<usize> {
-        let index = self.matches.partition_point(|&m| m < line);
-        self.matches.get(index).map(|m| m + 1)
+    /// The 1-based logical line containing a UTF-8 byte offset.
+    pub fn line_at_offset(&self, offset: usize) -> usize {
+        self.line_starts.partition_point(|&start| start <= offset)
     }
 
-    /// The last match before the 1-based `line`, as a 1-based line.
-    pub fn previous_match(&self, line: usize) -> Option<usize> {
-        let index = self.matches.partition_point(|&m| m + 1 < line);
-        index.checked_sub(1).map(|i| self.matches[i] + 1)
+    /// The first match on a line, or its start when the line has no match.
+    pub fn match_offset(&self, line: usize) -> usize {
+        let start = self.line_offset(line);
+        let index = self.matches.partition_point(|&offset| offset < start);
+        self.matches
+            .get(index)
+            .copied()
+            .filter(|&offset| self.line_at_offset(offset) == self.line_at_offset(start))
+            .unwrap_or(start)
     }
 
-    /// Which match `line` is, 1-based, when it is one.
-    pub fn match_ordinal(&self, line: usize) -> Option<usize> {
-        let index = line.checked_sub(1)?;
-        self.matches.binary_search(&index).ok().map(|i| i + 1)
+    /// The next occurrence's UTF-8 offset, excluding the current offset.
+    pub fn next_match(&self, offset: usize) -> Option<usize> {
+        let index = self.matches.partition_point(|&start| start <= offset);
+        self.matches.get(index).copied()
+    }
+
+    /// The preceding occurrence's UTF-8 offset, excluding the current offset.
+    pub fn previous_match(&self, offset: usize) -> Option<usize> {
+        let index = self.matches.partition_point(|&start| start < offset);
+        index.checked_sub(1).map(|i| self.matches[i])
+    }
+
+    /// Which occurrence `offset` starts, 1-based.
+    pub fn match_ordinal(&self, offset: usize) -> Option<usize> {
+        self.matches.binary_search(&offset).ok().map(|i| i + 1)
     }
 }
 
@@ -135,7 +147,7 @@ mod tests {
         let preview = prepare(text, Some(&matcher));
         assert_eq!(preview.text.as_ref(), text);
         assert_eq!(preview.line_starts, vec![0, 3, 13, 17, 32]);
-        assert_eq!(preview.matches, vec![1]);
+        assert_eq!(preview.matches, vec![4, 8]);
         assert_eq!(preview.highlights, vec![4..7, 8..11]);
     }
 
@@ -145,7 +157,7 @@ mod tests {
         let preview = prepare(text, Some(&Regex::new("foo").unwrap()));
         assert_eq!(preview.text.as_ref(), text);
         assert_eq!(preview.highlights, vec![4..7, 15..18]);
-        assert_eq!(preview.matches, vec![0, 1]);
+        assert_eq!(preview.matches, vec![4, 15]);
         for range in &preview.highlights {
             assert_eq!(&preview.text[range.clone()], "foo");
         }
@@ -157,7 +169,7 @@ mod tests {
         let preview = prepare(&text, Some(&Regex::new("foo").unwrap()));
         assert_eq!(preview.text.as_ref(), text);
         assert_eq!(preview.line_starts.len(), 10_004);
-        assert_eq!(preview.matches, vec![10_002]);
+        assert_eq!(preview.matches, vec![text.len() - 4]);
         assert_eq!(&preview.text[preview.highlights[0].clone()], "foo");
     }
 
@@ -166,8 +178,8 @@ mod tests {
         let preview = prepare("\tfoo  \r\nbar\n", Some(&Regex::new("foo").unwrap()));
         let refreshed = preview.with_matches(Some(&Regex::new("bar").unwrap()));
         assert!(std::sync::Arc::ptr_eq(&preview.text, &refreshed.text));
-        assert_eq!(preview.matches, vec![0]);
-        assert_eq!(refreshed.matches, vec![1]);
+        assert_eq!(preview.matches, vec![1]);
+        assert_eq!(refreshed.matches, vec![8]);
         assert_eq!(refreshed.highlights, vec![8..11]);
         let cleared = refreshed.with_matches(None);
         assert!(cleared.matches.is_empty());
@@ -192,7 +204,7 @@ mod tests {
         let preview = prepare("foo\r\n\nbar\n", Some(&Regex::new("^foo$").unwrap()));
         assert_eq!(preview.matches, vec![0]);
         let preview = preview.with_matches(Some(&Regex::new("^$").unwrap()));
-        assert_eq!(preview.matches, vec![1]);
+        assert_eq!(preview.matches, vec![5]);
         assert!(preview.highlights.is_empty());
         assert!(
             prepare("", Some(&Regex::new("^$").unwrap()))
@@ -205,13 +217,30 @@ mod tests {
     fn steps_between_matches() {
         let matcher = Regex::new("x").unwrap();
         let preview = prepare("x\n-\nx\n-\nx", Some(&matcher));
-        assert_eq!(preview.next_match(1), Some(3));
-        assert_eq!(preview.next_match(2), Some(3));
-        assert_eq!(preview.next_match(5), None);
-        assert_eq!(preview.previous_match(5), Some(3));
-        assert_eq!(preview.previous_match(1), None);
-        assert_eq!(preview.match_ordinal(3), Some(2));
+        assert_eq!(preview.next_match(0), Some(4));
+        assert_eq!(preview.next_match(1), Some(4));
+        assert_eq!(preview.next_match(8), None);
+        assert_eq!(preview.previous_match(8), Some(4));
+        assert_eq!(preview.previous_match(0), None);
+        assert_eq!(preview.match_ordinal(4), Some(2));
         assert_eq!(preview.match_ordinal(2), None);
+    }
+
+    #[test]
+    fn navigates_each_occurrence_and_reveals_the_first_match_on_a_line() {
+        let preview = prepare("prefix foo foo\n\tfoo", Some(&Regex::new("foo").unwrap()));
+        assert_eq!(preview.matches, vec![7, 11, 16]);
+        assert_eq!(preview.next_match(7), Some(11));
+        assert_eq!(preview.next_match(11), Some(16));
+        assert_eq!(preview.previous_match(16), Some(11));
+        assert_eq!(preview.previous_match(12), Some(11));
+        assert_eq!(preview.match_ordinal(11), Some(2));
+        assert_eq!(preview.match_offset(1), 7);
+        assert_eq!(preview.match_offset(2), 16);
+        assert_eq!(preview.line_at_offset(16), 2);
+        let unmatched = prepare("no match\n\tfoo", Some(&Regex::new("foo").unwrap()));
+        assert_eq!(unmatched.match_offset(1), 0);
+        assert_eq!(unmatched.match_offset(2), 10);
     }
 
     #[test]

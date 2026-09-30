@@ -149,7 +149,11 @@ facet narrows them to Rust, and the table lays them out one row per line.
   waiting for an editor to start. Drag the divider to resize it and `Esc` closes it.
   The pane button at the right of the title bar (`Ctrl+Alt+B`) hides the pane and
   brings it back on the same file.
-  `F4` and `Shift+F4` step through the matches, on into the next or previous file.
+  The up/down buttons, `F4` and `Shift+F4` step through every matching occurrence,
+  including multiple matches on one line, then into the next or previous file.
+  The cursor lands at the matching word rather than the line's start, and the
+  preview's counter counts occurrences. Clicking a result reveals the first
+  match on that line.
   Each tab keeps its own preview. The preview is for reading; nothing is edited.
   Its read-only Editor provides text selection and copying: drag across lines,
   double-click a word or triple-click a line, then press `Ctrl+C` (`Cmd+C` on

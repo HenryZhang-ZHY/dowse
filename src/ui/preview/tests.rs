@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{Preview, PreviewState};
+use super::{Preview, PreviewState, RevealTarget};
 use crate::ui::render::match_style;
 use crate::ui::{CONTEXT, ClosePreview, FocusSearch, NextMatch, PreviousMatch};
 use dowse::engine::preview::{self, FilePreview};
@@ -71,10 +71,9 @@ fn open<'a>(
         }),
         path: "preview.txt".into(),
         language: None,
-        line,
         state: PreviewState::Ready(file(text)),
         editor: None,
-        reveal: true,
+        target: Some(RevealTarget::Line(line)),
         task: None,
     };
     let (view, cx) = cx.add_window_view(move |_, _| Harness {
@@ -281,5 +280,144 @@ fn focused_editor_keeps_application_shortcuts(cx: &mut TestAppContext) {
             view.read(cx).actions,
             vec!["next", "previous", "close", "search"]
         );
+    });
+}
+
+#[gpui::test]
+fn cursor_reveals_each_occurrence_inside_wrapped_source(cx: &mut TestAppContext) {
+    let text = format!("{}needle needle\n\tneedle", "prefix ".repeat(3_000));
+    let (view, cx) = open(cx, &text, 1);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let file = view
+                .preview
+                .loaded()
+                .unwrap()
+                .with_matches(Some(&Regex::new("needle").unwrap()));
+            view.preview.state = PreviewState::Ready(Arc::new(file));
+            view.preview.select(1);
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    let matches = cx.read(|cx| view.read(cx).preview.loaded().unwrap().matches.clone());
+    assert_eq!(matches.len(), 3);
+    for (index, &offset) in matches.iter().enumerate() {
+        cx.read(|cx| {
+            let preview = &view.read(cx).preview;
+            let state = preview.editor.as_ref().unwrap().state.read(cx);
+            assert_eq!(state.cursor(), offset);
+            assert_eq!(state.selected_range(), offset..offset);
+            assert!(state.range_to_bounds(&(offset..offset + 6)).is_some());
+            assert_eq!(state.scroll_offset().x, px(0.));
+            assert_eq!(
+                preview.loaded().unwrap().match_ordinal(offset),
+                Some(index + 1)
+            );
+        });
+        if index + 1 < matches.len() {
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    let offset = view
+                        .preview
+                        .loaded()
+                        .unwrap()
+                        .next_match(view.preview.current_offset(cx))
+                        .unwrap();
+                    view.preview.select_match(offset);
+                    cx.notify();
+                });
+                window.draw(cx).clear(cx);
+            });
+        }
+    }
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let offset = view
+                .preview
+                .loaded()
+                .unwrap()
+                .previous_match(view.preview.current_offset(cx))
+                .unwrap();
+            view.preview.select_match(offset);
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.read(|cx| {
+        assert_eq!(view.read(cx).preview.current_offset(cx), matches[1]);
+        assert_eq!(view.read(cx).preview.current_line(cx), 1);
+    });
+}
+
+#[gpui::test]
+fn file_edges_reveal_first_and_last_occurrences(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx, "start foo foo\nlast foo foo", 1);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let file = view
+                .preview
+                .loaded()
+                .unwrap()
+                .with_matches(Some(&Regex::new("foo").unwrap()));
+            view.preview.state = PreviewState::Ready(Arc::new(file));
+            view.preview.select_edge(false);
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.read(|cx| {
+        let preview = &view.read(cx).preview;
+        assert_eq!(
+            preview.current_offset(cx),
+            *preview.loaded().unwrap().matches.last().unwrap()
+        );
+        assert_eq!(preview.current_line(cx), 2);
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.preview.select_edge(true);
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.read(|cx| {
+        let preview = &view.read(cx).preview;
+        assert_eq!(
+            preview.current_offset(cx),
+            preview.loaded().unwrap().matches[0]
+        );
+        assert_eq!(preview.current_line(cx), 1);
+    });
+}
+
+#[gpui::test]
+fn restored_occurrence_offset_survives_initial_editor_layout(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx, "start foo foo\nlast foo", 1);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let file = view
+                .preview
+                .loaded()
+                .unwrap()
+                .with_matches(Some(&Regex::new("foo").unwrap()));
+            let offset = file.matches[1];
+            view.preview.state = PreviewState::Ready(Arc::new(file));
+            view.preview.editor = None;
+            view.preview.select_match(offset);
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.read(|cx| {
+        let preview = &view.read(cx).preview;
+        let offset = preview.loaded().unwrap().matches[1];
+        assert_eq!(
+            preview.editor.as_ref().unwrap().state.read(cx).cursor(),
+            offset
+        );
+        assert_eq!(preview.current_offset(cx), offset);
+        assert_eq!(preview.current_line(cx), 1);
     });
 }
