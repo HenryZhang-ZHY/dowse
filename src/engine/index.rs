@@ -1,18 +1,25 @@
 //! One repository's tgrep index: where it lives, how it is built, brought up
 //! to date and published, and the set of files a search reads.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
+use rayon::prelude::*;
 use tgrep_core::builder::{self, BuildOptions};
-use tgrep_core::meta::{self, FileEvidence, INDEX_FORMAT_VERSION, IndexMeta};
+use tgrep_core::hybrid::HybridIndex;
+use tgrep_core::live::LiveIndex;
+use tgrep_core::meta::{self, FileEvidence, FileTableId, INDEX_FORMAT_VERSION, IndexMeta};
 use tgrep_core::path_index;
-use tgrep_core::query::{self, QueryPlan};
+use tgrep_core::query::QueryPlan;
 use tgrep_core::reader::IndexReader;
-use tgrep_core::visibility::PathVisibility;
+use tgrep_core::trigram::{self, TrigramMaskMap};
+use tgrep_core::visibility::{self, PathVisibility};
 use tgrep_core::walker::{self, FileMeta, MetaWalkOptions, MetaWalkResult, WalkOptions};
+
+use super::watch::Change;
 
 /// How [`RepoIndex::update_index`] brought an index up to date.
 #[must_use = "a changed index is not used until it is published"]
@@ -314,35 +321,56 @@ impl RepoIndex {
     /// Load the files a search reads: the index when it is usable, otherwise
     /// a walk of the folder that honours `.gitignore` like ripgrep.
     pub fn load_corpus(&self) -> Corpus {
-        match self.open_index() {
-            Some((reader, visibility)) => Corpus {
-                root: self.root.clone(),
-                source: Source::Index { reader, visibility },
+        let source = match self.open_hybrid() {
+            Some((index, visibility)) => Source::Index {
+                index: Box::new(RwLock::new(index)),
+                visibility,
+                caught_up: Mutex::new(HashMap::new()),
             },
-            None => Corpus {
-                root: self.root.clone(),
-                source: Source::Walk {
-                    paths: self.walk_files(),
-                },
+            None => Source::Walk {
+                paths: self.walk_files(),
+                changed: Mutex::new(BTreeSet::new()),
             },
+        };
+        Corpus {
+            root: self.root.clone(),
+            source,
         }
     }
 
     fn open_index(&self) -> Option<(IndexReader, PathVisibility)> {
-        let meta = IndexMeta::load(&self.index_dir).ok()?;
-        if !self.meta_is_usable(&meta) {
-            return None;
-        }
+        let meta = self.usable_meta()?;
         let reader = IndexReader::open(&self.index_dir).ok()?;
         if reader.is_degenerate() || reader.validate_lookup().is_err() {
             return None;
         }
+        let visibility = self.visibility(&meta, reader.file_table_id())?;
+        Some((reader, visibility))
+    }
+
+    /// The index with an empty overlay for the files that change after it,
+    /// as `tgrep serve` keeps it.
+    fn open_hybrid(&self) -> Option<(HybridIndex, PathVisibility)> {
+        let meta = self.usable_meta()?;
+        let index = HybridIndex::open(&self.index_dir, &self.root).ok()?;
+        let visibility = self.visibility(&meta, index.reader_arc().file_table_id())?;
+        Some((index, visibility))
+    }
+
+    fn usable_meta(&self) -> Option<IndexMeta> {
+        let meta = IndexMeta::load(&self.index_dir).ok()?;
+        self.meta_is_usable(&meta).then_some(meta)
+    }
+
+    /// Which of the index's entries are hidden, when that was recorded for
+    /// this very generation of it.
+    fn visibility(&self, meta: &IndexMeta, file_table_id: FileTableId) -> Option<PathVisibility> {
         let visibility = path_index::read_filename_index(&self.index_dir)
             .ok()??
             .visibility?;
         visibility
-            .covers_index(&meta, reader.file_table_id())
-            .then_some((reader, visibility.paths))
+            .covers_index(meta, file_table_id)
+            .then_some(visibility.paths)
     }
 
     /// Files that differ from the index: modified, added or deleted since it
@@ -539,7 +567,8 @@ impl StagedIndex {
 }
 
 /// The files one search reads, loaded once per index generation and shared by
-/// every search until the index changes.
+/// every search until the index changes. Files changed since the index was
+/// built join it through [`Corpus::catch_up`].
 pub struct Corpus {
     root: PathBuf,
     source: Source,
@@ -547,12 +576,29 @@ pub struct Corpus {
 
 enum Source {
     Index {
-        reader: IndexReader,
+        /// The on-disk index, and in its overlay the changed files a default
+        /// search can see.
+        index: Box<RwLock<HybridIndex>>,
         visibility: PathVisibility,
+        /// Changed path -> the version of its change the overlay holds.
+        caught_up: Mutex<HashMap<String, u64>>,
     },
     Walk {
         paths: Vec<String>,
+        /// Visible files changed since the walk.
+        changed: Mutex<BTreeSet<String>>,
     },
+}
+
+/// What the overlay learns of a changed file.
+enum Overlay {
+    /// Text to search, as its trigrams.
+    Text(TrigramMaskMap),
+    /// Read, but not text.
+    Binary,
+    /// Not read: gone, unreadable, too large, binary by its extension, or
+    /// hidden since the index was built.
+    Gone,
 }
 
 impl Corpus {
@@ -562,33 +608,154 @@ impl Corpus {
 
     pub fn file_count(&self) -> usize {
         match &self.source {
-            Source::Index { reader, .. } => reader.num_files(),
-            Source::Walk { paths } => paths.len(),
+            Source::Index { index, .. } => index.read().unwrap().num_files(),
+            Source::Walk { paths, .. } => paths.len(),
         }
     }
 
+    /// Bring the corpus up to date with the files changed since its index was
+    /// built, reading only those whose change it has not seen yet, and only
+    /// when a default search can see them. Changes no longer listed, which a
+    /// newer index covers, are let go. Returns how many files were read.
+    pub fn catch_up(&self, changes: &[Change]) -> usize {
+        match &self.source {
+            Source::Index {
+                index,
+                visibility,
+                caught_up,
+            } => {
+                let mut caught_up = caught_up.lock().unwrap();
+                let listed: HashSet<&str> = changes.iter().map(|c| c.path.as_str()).collect();
+                let forgotten: Vec<String> = caught_up
+                    .keys()
+                    .filter(|path| !listed.contains(path.as_str()))
+                    .cloned()
+                    .collect();
+                let fresh: Vec<&Change> = changes
+                    .iter()
+                    .filter(|c| caught_up.get(&c.path) != Some(&c.version))
+                    .collect();
+                if forgotten.is_empty() && fresh.is_empty() {
+                    return 0;
+                }
+                // Read outside the index lock, so searches already caught up
+                // carry on meanwhile. Files the index hides are left alone:
+                // their entries stay hidden, and they are never read.
+                let entries: Vec<(&Change, Option<Overlay>)> = fresh
+                    .into_par_iter()
+                    .map(|change| {
+                        let entry = if !visibility.is_visible(&change.path, "", false) {
+                            None
+                        } else if self.newly_hidden(&change.path) {
+                            Some(Overlay::Gone)
+                        } else {
+                            Some(self.read_for_overlay(&change.path))
+                        };
+                        (change, entry)
+                    })
+                    .collect();
+                let read = entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry, Some(Overlay::Text(_) | Overlay::Binary)))
+                    .count();
+                let mut index = index.write().unwrap();
+                index.live.clear_reconciled_paths(&forgotten);
+                for path in &forgotten {
+                    caught_up.remove(path);
+                }
+                for (change, entry) in entries {
+                    match entry {
+                        Some(Overlay::Text(trigrams)) => {
+                            index.live.commit_upsert(&change.path, trigrams)
+                        }
+                        // Nothing to search: the index's old entry goes.
+                        Some(Overlay::Binary | Overlay::Gone) => {
+                            index.live.delete_file(&change.path)
+                        }
+                        None => {}
+                    }
+                    caught_up.insert(change.path.clone(), change.version);
+                }
+                read
+            }
+            Source::Walk { changed, .. } => {
+                // Every candidate is read anyway; only which ones is kept.
+                let mut changed = changed.lock().unwrap();
+                changed.clear();
+                changed.extend(
+                    changes
+                        .iter()
+                        .filter(|c| !self.newly_hidden(&c.path))
+                        .map(|c| c.path.clone()),
+                );
+                0
+            }
+        }
+    }
+
+    /// Read a changed file the way a build reads it.
+    fn read_for_overlay(&self, relative: &str) -> Overlay {
+        let path = self.full_path(relative);
+        let too_large = |len| walker::DEFAULT_MAX_FILE_SIZE.is_some_and(|limit| len > limit);
+        let readable = std::fs::metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file() && !too_large(metadata.len()));
+        if !readable || walker::is_binary_extension(&path) {
+            return Overlay::Gone;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Overlay::Gone;
+        };
+        let text = tgrep_core::encoding::decode_for_index(&bytes);
+        if trigram::is_binary(&text) {
+            Overlay::Binary
+        } else {
+            Overlay::Text(LiveIndex::compute_trigram_masks(&text))
+        }
+    }
+
+    /// Whether the file, or a folder on its way, is hidden by its name or, on
+    /// Windows, its attributes, by tgrep's rule: what the index could not
+    /// know of folders made after it was built.
+    fn newly_hidden(&self, relative: &str) -> bool {
+        relative
+            .match_indices('/')
+            .map(|(end, _)| &relative[..end])
+            .chain(std::iter::once(relative))
+            .any(|prefix| {
+                let path = self.full_path(prefix);
+                let metadata = std::fs::symlink_metadata(&path).ok();
+                visibility::is_hidden(&path, metadata.as_ref())
+            })
+    }
+
     /// Repository-relative, `/`-separated paths of every file that can match
-    /// `plan`. Hidden files are left out, as in a default `tgrep` search.
+    /// `plan`, changed files included once caught up. Hidden files are left
+    /// out, as in a default `tgrep` search.
     pub fn candidates(&self, plan: &QueryPlan) -> Vec<String> {
         match &self.source {
-            Source::Index { reader, visibility } => {
-                let ids = if plan.is_match_all() {
-                    reader.all_file_ids()
-                } else {
-                    query::execute_plan_with_masks(plan, &|trigram| {
-                        reader.lookup_trigram_with_masks(trigram)
-                    })
-                };
+            Source::Index {
+                index, visibility, ..
+            } => {
+                let index = index.read().unwrap();
+                let (ids, reader) = index.execute_query_with_masks(plan);
                 let mut paths: Vec<String> = ids
                     .into_iter()
-                    .filter_map(|id| reader.file_path(id))
+                    .filter_map(|id| index.resolve_path(id, &reader))
                     .filter(|path| visibility.is_visible(path, "", false))
-                    .map(str::to_string)
                     .collect();
                 paths.sort();
                 paths
             }
-            Source::Walk { paths } => paths.clone(),
+            Source::Walk { paths, changed } => {
+                let mut paths = paths.clone();
+                let changed = changed.lock().unwrap();
+                if !changed.is_empty() {
+                    paths.extend(changed.iter().cloned());
+                    paths.sort();
+                    paths.dedup();
+                }
+                paths
+            }
         }
     }
 
@@ -616,6 +783,7 @@ pub fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tgrep_core::query;
 
     fn tree() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -831,6 +999,103 @@ mod tests {
         let mut stale = index.stale_files().unwrap();
         stale.sort();
         assert_eq!(stale, ["lib.rs", "src/lib.rs"]);
+    }
+
+    fn change(path: &str, version: u64) -> Change {
+        Change {
+            path: path.into(),
+            version,
+        }
+    }
+
+    #[test]
+    fn changed_files_are_searched_by_their_new_contents() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
+
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn moved_needle() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/new.rs"), "fn brand_new() {}\n").unwrap();
+        std::fs::remove_file(dir.path().join("README.md")).unwrap();
+        let read = corpus.catch_up(&[
+            change("README.md", 0),
+            change("src/lib.rs", 1),
+            change("src/new.rs", 2),
+        ]);
+        assert_eq!(read, 2);
+
+        let find = |literal| corpus.candidates(&query::build_literal_plan(literal, false));
+        assert!(find("needle_here").is_empty());
+        assert_eq!(find("moved_needle"), ["src/lib.rs"]);
+        assert_eq!(find("brand_new"), ["src/new.rs"]);
+        assert_eq!(
+            corpus.candidates(&QueryPlan::MatchAll),
+            ["src/lib.rs", "src/new.rs"]
+        );
+    }
+
+    #[test]
+    fn catching_up_reads_only_files_that_changed_again() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
+
+        std::fs::write(dir.path().join("src/lib.rs"), "fn first() {}\n").unwrap();
+        assert_eq!(corpus.catch_up(&[change("src/lib.rs", 4)]), 1);
+        assert_eq!(corpus.catch_up(&[change("src/lib.rs", 4)]), 0);
+        std::fs::write(dir.path().join("src/lib.rs"), "fn second() {}\n").unwrap();
+        assert_eq!(corpus.catch_up(&[change("src/lib.rs", 5)]), 1);
+        let find = |literal| corpus.candidates(&query::build_literal_plan(literal, false));
+        assert!(find("first()").is_empty());
+        assert_eq!(find("second()"), ["src/lib.rs"]);
+
+        // A change no longer listed is covered by the index again.
+        assert_eq!(corpus.catch_up(&[]), 0);
+        assert_eq!(find("needle_here"), ["src/lib.rs"]);
+    }
+
+    #[test]
+    fn hidden_changed_files_are_neither_read_nor_searched() {
+        let dir = tree();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/FETCH_HEAD"), "abc branch 'main'\n").unwrap();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        index.build_index().unwrap().publish().unwrap();
+        let corpus = index.load_corpus();
+        let files = corpus.file_count();
+
+        std::fs::write(dir.path().join(".git/FETCH_HEAD"), "fresh_fetch\n").unwrap();
+        // A hidden folder that did not exist when the index was built.
+        std::fs::create_dir_all(dir.path().join("src/.cache")).unwrap();
+        std::fs::write(dir.path().join("src/.cache/tmp.rs"), "fresh_cache\n").unwrap();
+        let read = corpus.catch_up(&[change(".git/FETCH_HEAD", 0), change("src/.cache/tmp.rs", 1)]);
+        assert_eq!(read, 0);
+        // The index's own hidden entry is left as it is.
+        assert_eq!(corpus.file_count(), files);
+        let find = |literal| corpus.candidates(&query::build_literal_plan(literal, false));
+        assert!(find("fresh_fetch").is_empty());
+        assert!(find("fresh_cache").is_empty());
+        assert_eq!(
+            corpus.candidates(&QueryPlan::MatchAll),
+            ["README.md", "src/lib.rs"]
+        );
+    }
+
+    #[test]
+    fn a_walked_folder_searches_its_visible_changed_files_too() {
+        let dir = tree();
+        let index = RepoIndex::open(dir.path()).unwrap();
+        let corpus = index.load_corpus();
+        assert!(!corpus.is_indexed());
+        std::fs::write(dir.path().join("added.rs"), "fn added() {}\n").unwrap();
+        std::fs::write(dir.path().join(".env"), "SECRET=1\n").unwrap();
+        corpus.catch_up(&[change(".env", 0), change("added.rs", 1)]);
+        assert_eq!(
+            corpus.candidates(&QueryPlan::MatchAll),
+            ["README.md", "added.rs", "src/lib.rs"]
+        );
     }
 
     #[test]
