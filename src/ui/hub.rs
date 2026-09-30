@@ -437,7 +437,7 @@ impl RepoHub {
                     changed: state
                         .tracker
                         .as_ref()
-                        .map(|tracker| tracker.changed_paths())
+                        .map(|tracker| tracker.changes())
                         .unwrap_or_default(),
                 })
             })

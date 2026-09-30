@@ -15,6 +15,7 @@ use super::index::Corpus;
 use super::language;
 use super::query::CompiledQuery;
 use super::repo::RepoInfo;
+use super::watch::Change;
 
 /// Files searched in parallel between checks of the result limit.
 const SEARCH_CHUNK: usize = 512;
@@ -159,13 +160,13 @@ pub struct SearchOutcome {
 }
 
 /// One repository to search: its files, and those changed since its index
-/// was built (see [`super::watch::ChangeTracker`]). Changed files are read
-/// regardless of what the index says, so edits are found before a rebuild.
+/// was built (see [`super::watch::ChangeTracker`]). The corpus takes in the
+/// changed files before the search, so edits are found before a rebuild.
 #[derive(Clone)]
 pub struct SearchSource {
     pub repo: Arc<RepoInfo>,
     pub corpus: Arc<Corpus>,
-    pub changed: Vec<String>,
+    pub changed: Vec<Change>,
 }
 
 /// Search every source for `query`, checking `cancel` between files.
@@ -181,12 +182,8 @@ pub fn search(
         if !query.may_match_repo(&source.repo) {
             continue;
         }
+        source.corpus.catch_up(&source.changed);
         let mut paths = query.candidates(&source.corpus);
-        if !source.changed.is_empty() {
-            paths.extend(source.changed.iter().cloned());
-            paths.sort();
-            paths.dedup();
-        }
         paths.retain(|path| {
             query.path_filter.matches(path)
                 && query.verdict(&source.repo, Some(path)) != Some(false)
@@ -546,6 +543,7 @@ mod tests {
     use super::*;
     use crate::engine::index::RepoIndex;
     use crate::engine::query::SearchQuery;
+    use crate::engine::watch::Change;
 
     fn limits() -> SearchLimits {
         SearchLimits::default()
@@ -868,11 +866,61 @@ mod tests {
             )
         };
         assert!(run(&source).files.is_empty());
-        source.changed = vec!["new.rs".into()];
+        source.changed = vec![change("new.rs", 0)];
         assert_eq!(run(&source).files.len(), 1);
         // A changed file that was deleted is skipped quietly.
-        source.changed = vec!["gone.rs".into()];
+        source.changed = vec![change("gone.rs", 1)];
         assert!(run(&source).files.is_empty());
+    }
+
+    fn change(path: &str, version: u64) -> Change {
+        Change {
+            path: path.into(),
+            version,
+        }
+    }
+
+    #[test]
+    fn a_term_found_nowhere_reads_no_changed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let mut source = indexed_source("repo", dir.path());
+        std::fs::write(dir.path().join("a.rs"), "fn a_changed() {}\n").unwrap();
+        source.changed = vec![change("a.rs", 0)];
+
+        for _ in 0..2 {
+            let outcome = search(
+                std::slice::from_ref(&source),
+                &compile("xyzzyNotThere123"),
+                &limits(),
+                &AtomicBool::new(false),
+            );
+            assert_eq!((outcome.searched_files, outcome.bytes_read), (0, 0));
+        }
+    }
+
+    #[test]
+    fn changed_files_under_git_are_not_searched() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/FETCH_HEAD"), "old\n").unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let mut source = indexed_source("repo", dir.path());
+        std::fs::write(
+            dir.path().join(".git/FETCH_HEAD"),
+            "abc\t\tbranch 'main' of https://example.com/repo\n",
+        )
+        .unwrap();
+        source.changed = vec![change(".git/FETCH_HEAD", 0)];
+
+        let outcome = search(
+            std::slice::from_ref(&source),
+            &compile("branch 'main' of"),
+            &limits(),
+            &AtomicBool::new(false),
+        );
+        assert!(outcome.files.is_empty());
+        assert_eq!(outcome.bytes_read, 0);
     }
 
     #[test]

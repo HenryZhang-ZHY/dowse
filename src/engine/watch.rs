@@ -79,11 +79,6 @@ impl ChangeTracker {
         })
     }
 
-    /// Repository-relative paths changed since the last completed index build.
-    pub fn changed_paths(&self) -> Vec<String> {
-        self.state.changed.lock().unwrap().keys().cloned().collect()
-    }
-
     /// The files changed since the last completed index build, by path.
     pub fn changes(&self) -> Vec<Change> {
         self.state
@@ -202,10 +197,14 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    fn changed_paths(tracker: &ChangeTracker) -> Vec<String> {
+        tracker.changes().into_iter().map(|c| c.path).collect()
+    }
+
     fn wait_for(tracker: &ChangeTracker, expected: &[&str]) -> Vec<String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let paths = tracker.changed_paths();
+            let paths = changed_paths(tracker);
             if expected.iter().all(|path| paths.iter().any(|p| p == path))
                 || Instant::now() > deadline
             {
@@ -221,7 +220,7 @@ mod tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let tracker = ChangeTracker::start(&root).unwrap();
         tracker.note(vec!["src/a.rs".into(), "b.md".into()]);
-        assert_eq!(tracker.changed_paths(), ["b.md", "src/a.rs"]);
+        assert_eq!(changed_paths(&tracker), ["b.md", "src/a.rs"]);
         let mark = tracker.mark();
         tracker.forget_before(mark);
         assert_eq!(tracker.changed_count(), 0);
@@ -260,7 +259,7 @@ mod tests {
         wait_for(&tracker, &["src/new.rs", "moved/deep/a.rs"]);
         // Give the directories' own events time to arrive too.
         std::thread::sleep(Duration::from_millis(300));
-        let paths = tracker.changed_paths();
+        let paths = changed_paths(&tracker);
         assert!(paths.contains(&"src/new.rs".to_string()), "{paths:?}");
         assert!(paths.contains(&"moved/deep/a.rs".to_string()), "{paths:?}");
         assert!(!paths.contains(&"src/old.rs".to_string()), "{paths:?}");
