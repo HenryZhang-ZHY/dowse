@@ -11,6 +11,7 @@ use std::time::Duration;
 use gpui_kit::*;
 
 use super::app::{Page, SearchApp};
+use super::preview::PreviewState;
 use super::tabs::SearchTab;
 use super::{GoBack, GoForward};
 use dowse::engine::facets::FacetFilter;
@@ -36,11 +37,12 @@ struct PreviewSpot {
     path: String,
     language: Option<&'static str>,
     line: usize,
+    offset: Option<usize>,
 }
 
 impl Visit {
     /// `tab` as it is now, for `query`.
-    fn of(tab: &SearchTab, query: SearchQuery) -> Self {
+    fn of(tab: &SearchTab, query: SearchQuery, cx: &App) -> Self {
         Self {
             query,
             facet_filter: tab.facet_filter.clone(),
@@ -48,7 +50,9 @@ impl Visit {
                 repo: preview.repo.clone(),
                 path: preview.path.clone(),
                 language: preview.language,
-                line: preview.line,
+                line: preview.current_line(cx),
+                offset: matches!(&preview.state, PreviewState::Ready(_))
+                    .then(|| preview.current_offset(cx)),
             }),
             preview_open: tab.preview_open,
         }
@@ -98,7 +102,7 @@ impl SearchApp {
         {
             let settled = tab.history.settled.take().unwrap_or_default();
             if !settled.is_empty() {
-                let visit = Visit::of(tab, settled);
+                let visit = Visit::of(tab, settled, cx);
                 push(&mut tab.history.back, visit);
                 tab.history.forward.clear();
             }
@@ -159,7 +163,7 @@ impl SearchApp {
             return;
         };
         if !query.is_empty() {
-            let here = Visit::of(tab, query);
+            let here = Visit::of(tab, query, cx);
             let other = if back {
                 &mut tab.history.forward
             } else {
@@ -191,6 +195,11 @@ impl SearchApp {
         });
         if let Some(spot) = visit.preview {
             self.preview_hit(spot.repo, spot.path, spot.language, spot.line, cx);
+            if let Some(offset) = spot.offset
+                && let Some(preview) = self.tab_mut().preview.as_mut()
+            {
+                preview.select_match(offset);
+            }
         }
         self.tab_mut().preview_open = visit.preview_open;
         self.run_search(false, cx);

@@ -724,7 +724,7 @@ impl SearchApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let results = self.render_results(window, cx).into_any_element();
-        match self.render_preview(cx) {
+        match self.render_preview(window, cx) {
             Some(preview) => div()
                 .flex_1()
                 .min_w_0()
@@ -1034,7 +1034,7 @@ impl SearchApp {
             .preview
             .as_ref()
             .filter(|preview| preview.shows_file(&file))
-            .map(|preview| preview.line);
+            .map(|preview| preview.current_line(cx));
 
         let header = {
             let (open_repo, open_path, language) =
