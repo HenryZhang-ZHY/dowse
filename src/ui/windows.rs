@@ -83,7 +83,7 @@ impl Windows {
                 (Session::default(), true)
             }
         };
-        startup_errors.extend(RepoHub::init(config.library_file(), cx));
+        startup_errors.extend(RepoHub::init(&config, cx));
         cx.set_global(Self {
             config,
             session,

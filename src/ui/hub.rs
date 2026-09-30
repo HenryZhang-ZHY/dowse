@@ -14,10 +14,12 @@ use gpui_kit::*;
 
 use crate::format;
 use dowse::diagnostics::metrics::metrics;
-use dowse::engine::index::{Corpus, IndexStatus, IndexUpdate, RepoIndex};
+use dowse::engine::config::ConfigDir;
+use dowse::engine::index::{self, Corpus, IndexMove, IndexStatus, IndexUpdate, RepoIndex};
 use dowse::engine::library::{Library, LibraryEntry};
 use dowse::engine::repo::{self, RepoInfo};
 use dowse::engine::search::SearchSource;
+use dowse::engine::settings::{IndexLocation, IndexPlace, IndexSettings, Settings};
 use dowse::engine::sync::Interval;
 use dowse::engine::watch::ChangeTracker;
 
@@ -36,6 +38,10 @@ pub(super) struct RepoHub {
     library_file: PathBuf,
     /// Set when the library could not be read, so it is never overwritten.
     library_locked: bool,
+    settings: Settings,
+    settings_file: PathBuf,
+    /// Set when the settings could not be read, so they are never overwritten.
+    settings_locked: bool,
     /// Repositories some window uses, by id.
     open: HashMap<String, RepoState>,
     /// Repositories whose builds go first: those the focused window searches.
@@ -76,8 +82,15 @@ struct RepoState {
     changed_files: usize,
     /// How many windows use the repository.
     users: usize,
+    /// Loading the index, or moving it.
     load_task: Option<Task<()>>,
     index_task: Option<Task<()>>,
+    /// The index is to move here from where this opens it, once no load or
+    /// build uses it.
+    pending_move: Option<RepoIndex>,
+    /// Something the user should know about the index, such as why it was
+    /// built again.
+    note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +129,10 @@ pub(super) struct RepoView {
     pub(super) info: Arc<RepoInfo>,
     pub(super) activity: IndexActivity,
     pub(super) changed_files: usize,
+    /// Where the index is, or will be once built; `None` when the folder is
+    /// gone.
+    pub(super) index_dir: Option<PathBuf>,
+    pub(super) note: Option<String>,
 }
 
 impl RepoView {
@@ -148,31 +165,55 @@ impl RepoView {
 }
 
 impl RepoHub {
-    /// Create the hub every window shares, over the library in
-    /// `library_file`. Returns why the library could not be read, if so.
-    pub(super) fn init(library_file: PathBuf, cx: &mut App) -> Option<String> {
-        let (library, error) = match Library::load(&library_file) {
-            Ok(library) => (library, None),
+    /// Create the hub every window shares, over the library and settings in
+    /// `config`. Returns why they could not be read, if so.
+    pub(super) fn init(config: &ConfigDir, cx: &mut App) -> Vec<String> {
+        let mut errors = Vec::new();
+        let library_file = config.library_file();
+        let (library, library_locked) = match Library::load(&library_file) {
+            Ok(library) => (library, false),
             Err(error) => {
                 log::error!("could not read the library: {error:#}");
-                (
-                    Library::default(),
-                    Some(format!(
-                        "{error:#}. Tags will not be saved until it is fixed."
-                    )),
-                )
+                errors.push(format!(
+                    "{error:#}. Tags will not be saved until it is fixed."
+                ));
+                (Library::default(), true)
             }
         };
+        let settings_file = config.settings_file();
+        let (settings, settings_locked) = match Settings::load(&settings_file) {
+            Ok(settings) => (settings, false),
+            Err(error) => {
+                log::error!("could not read the settings: {error:#}");
+                errors.push(format!(
+                    "{error:#}. The defaults apply, and settings will not be saved until it is fixed."
+                ));
+                (Settings::default(), true)
+            }
+        };
+        let external_dir = settings.index.external_dir();
+        cx.background_spawn(async move {
+            for removed in index::remove_orphaned_indexes(&external_dir) {
+                log::info!(
+                    "removed {}, the index of a folder that is gone",
+                    index::display_path(&removed)
+                );
+            }
+        })
+        .detach();
         let hub = cx.new(|cx| Self {
             library,
             library_file,
-            library_locked: error.is_some(),
+            library_locked,
+            settings,
+            settings_file,
+            settings_locked,
             open: HashMap::new(),
             preferred: HashSet::new(),
             _poll_task: Self::poll(cx),
         });
         cx.set_global(GlobalHub(hub));
-        error
+        errors
     }
 
     pub(super) fn global(cx: &App) -> Entity<Self> {
@@ -256,6 +297,168 @@ impl RepoHub {
         self.save()
     }
 
+    // ----- where indexes live ---------------------------------------------------
+
+    pub(super) fn index_settings(&self) -> &IndexSettings {
+        &self.settings.index
+    }
+
+    /// The repository's own index location, `None` when it follows the app's.
+    pub(super) fn own_index_location(&self, id: &str) -> Option<IndexLocation> {
+        self.library
+            .get(Path::new(id))
+            .and_then(|entry| entry.index_location)
+    }
+
+    /// Where the repository's index lives, by its setting and the app's.
+    pub(super) fn index_place(&self, id: &str) -> IndexPlace {
+        self.settings.index.place(self.own_index_location(id))
+    }
+
+    /// Keep the indexes of these repositories at `location`, or where the
+    /// app's setting says with `None`, moving those that change place.
+    pub(super) fn set_index_location(
+        &mut self,
+        ids: &[String],
+        location: Option<IndexLocation>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let before = self.index_places();
+        let mut changed = false;
+        for id in ids {
+            changed |= self.library.set_index_location(Path::new(id), location);
+        }
+        if !changed {
+            return Ok(());
+        }
+        self.save()?;
+        self.move_indexes(before, cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// Change where indexes live, moving those that change place.
+    pub(super) fn set_index_settings(
+        &mut self,
+        settings: IndexSettings,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if self.settings.index == settings {
+            return Ok(());
+        }
+        if self.settings_locked {
+            anyhow::bail!(
+                "{} could not be read, so it is not overwritten; fix or remove it first",
+                self.settings_file.display()
+            );
+        }
+        let before = self.index_places();
+        self.settings.index = settings;
+        self.settings.save(&self.settings_file)?;
+        self.move_indexes(before, cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// Where every repository's index lives now.
+    fn index_places(&self) -> HashMap<String, IndexPlace> {
+        self.library
+            .repos
+            .iter()
+            .map(|entry| {
+                let id = entry.path.to_string_lossy().into_owned();
+                let place = self.index_place(&id);
+                (id, place)
+            })
+            .collect()
+    }
+
+    /// Move the indexes whose place changed from `before`. Open repositories
+    /// move theirs once no load or build uses it; the others at once, in the
+    /// background.
+    fn move_indexes(&mut self, before: HashMap<String, IndexPlace>, cx: &mut Context<Self>) {
+        for (id, old_place) in before {
+            let new_place = self.index_place(&id);
+            if new_place == old_place {
+                continue;
+            }
+            let root = PathBuf::from(&id);
+            let (Ok(old), Ok(new)) = (
+                RepoIndex::open_in(&root, &old_place),
+                RepoIndex::open_in(&root, &new_place),
+            ) else {
+                continue;
+            };
+            match self.open.get_mut(&id) {
+                Some(state) => {
+                    // A move still waiting knows where the index really is.
+                    state.pending_move.get_or_insert(old);
+                    state.index = Some(new);
+                }
+                None => {
+                    cx.background_spawn(async move {
+                        log_move(&id, &new, new.move_from(&old));
+                    })
+                    .detach();
+                }
+            }
+        }
+        self.start_pending_moves(cx);
+    }
+
+    /// Move the indexes of open repositories that wait to move and that no
+    /// load or build uses, then load them from their new place.
+    fn start_pending_moves(&mut self, cx: &mut Context<Self>) {
+        let ready: Vec<String> = self
+            .open
+            .iter()
+            .filter(|(_, state)| {
+                state.pending_move.is_some()
+                    && !matches!(
+                        state.activity,
+                        IndexActivity::Loading | IndexActivity::Building
+                    )
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ready {
+            let Some(state) = self.open.get_mut(&id) else {
+                continue;
+            };
+            let (Some(old), Some(new)) = (state.pending_move.take(), state.index.clone()) else {
+                continue;
+            };
+            state.activity = IndexActivity::Loading;
+            let corpus = state.corpus.take();
+            cx.emit(HubEvent::ReleaseCorpus(id.clone()));
+            state.load_task = Some(cx.spawn(async move |this, cx| {
+                let moved = cx
+                    .background_spawn(async move {
+                        if let Some(corpus) = corpus {
+                            wait_for_readers(corpus);
+                        }
+                        let moved = new.move_from(&old);
+                        log_move(&id, &new, moved.clone());
+                        (id, moved)
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    let (id, moved) = moved;
+                    if let Some(state) = this.open.get_mut(&id) {
+                        state.note = match moved {
+                            IndexMove::Kept(reason) => Some(format!(
+                                "The index could not be moved ({reason}), so it was built again here; the old one was left where it was."
+                            )),
+                            _ => None,
+                        };
+                    }
+                    this.load(&id, cx);
+                })
+                .ok();
+            }));
+        }
+    }
+
     /// Note that dowse tried to pull the repository at `time`.
     pub(super) fn note_pulled(&mut self, id: &str, time: SystemTime) {
         self.library.set_pulled_at(Path::new(id), time);
@@ -337,7 +540,7 @@ impl RepoHub {
             return;
         };
         log::info!("opening {}", entry.path.display());
-        let mut state = RepoState::open(&entry);
+        let mut state = RepoState::open(&entry, &self.index_place(id));
         state.users = 1;
         let loadable = state.index.is_some();
         self.open.insert(id.to_string(), state);
@@ -372,11 +575,7 @@ impl RepoHub {
         let mut views: Vec<RepoView> = ids
             .into_iter()
             .filter_map(|id| self.open.get(id))
-            .map(|state| RepoView {
-                info: state.info.clone(),
-                activity: state.activity.clone(),
-                changed_files: state.changed_files,
-            })
+            .map(RepoState::view)
             .collect();
         views.sort_by_key(|view| view.info.name.to_lowercase());
         views
@@ -384,11 +583,7 @@ impl RepoHub {
 
     /// A snapshot of the repository, when it is open.
     pub(super) fn view(&self, id: &str) -> Option<RepoView> {
-        self.open.get(id).map(|state| RepoView {
-            info: state.info.clone(),
-            activity: state.activity.clone(),
-            changed_files: state.changed_files,
-        })
+        self.open.get(id).map(RepoState::view)
     }
 
     /// Snapshots of every open repository, sorted by name.
@@ -513,6 +708,8 @@ impl RepoHub {
                 state.activity = IndexActivity::Idle(status);
                 if needs_index {
                     this.queue_index(&id, IndexJob::Update, cx);
+                } else {
+                    this.start_pending_moves(cx);
                 }
                 cx.emit(HubEvent::CorpusChanged(id));
                 cx.notify();
@@ -543,6 +740,7 @@ impl RepoHub {
     /// once would only compete for memory and disk. Preferred repositories go
     /// first.
     fn start_next_build(&mut self, cx: &mut Context<Self>) {
+        self.start_pending_moves(cx);
         if self
             .open
             .values()
@@ -730,6 +928,7 @@ impl RepoHub {
         let mut changed_view = false;
         let mut branch_moved = false;
         let mut outdated = Vec::new();
+        let mut lost = Vec::new();
         for (id, state) in &mut self.open {
             let count = state
                 .tracker
@@ -754,13 +953,33 @@ impl RepoHub {
                 state.activity,
                 IndexActivity::Idle(IndexStatus::Ready { .. })
             );
-            if ready && count >= AUTO_UPDATE_CHANGES {
+            if ready
+                && state
+                    .index
+                    .as_ref()
+                    .is_some_and(|index| !index.index_exists())
+            {
+                log::warn!("the index of {id} was deleted; building it again");
+                state.note = Some(deleted_note(state.index_dir_is_in_repo()));
+                lost.push(id.clone());
+            } else if ready && count >= AUTO_UPDATE_CHANGES {
                 log::info!("{count} files changed in {id}; updating its index");
                 outdated.push(id.clone());
             }
         }
         for id in outdated {
             self.queue_index(&id, IndexJob::Update, cx);
+        }
+        for id in lost {
+            // Searches go back to reading the folder until the new index is
+            // built; what is left of the old one is let go so it can be
+            // replaced.
+            if let Some(state) = self.open.get_mut(&id) {
+                state.corpus = None;
+            }
+            cx.emit(HubEvent::ReleaseCorpus(id.clone()));
+            self.load(&id, cx);
+            changed_view = true;
         }
         if branch_moved {
             cx.emit(HubEvent::MetadataChanged);
@@ -772,8 +991,8 @@ impl RepoHub {
 }
 
 impl RepoState {
-    fn open(entry: &LibraryEntry) -> Self {
-        let index = RepoIndex::open(&entry.path).ok();
+    fn open(entry: &LibraryEntry, place: &IndexPlace) -> Self {
+        let index = RepoIndex::open_in(&entry.path, place).ok();
         let tracker = index
             .as_ref()
             .and_then(|index| {
@@ -809,6 +1028,55 @@ impl RepoState {
             users: 0,
             load_task: None,
             index_task: None,
+            pending_move: None,
+            note: None,
+        }
+    }
+
+    /// Whether the index lives in the repository's own `.tgrep`.
+    fn index_dir_is_in_repo(&self) -> bool {
+        self.index
+            .as_ref()
+            .is_some_and(|index| index.index_dir().starts_with(index.root()))
+    }
+
+    fn view(&self) -> RepoView {
+        RepoView {
+            info: self.info.clone(),
+            activity: self.activity.clone(),
+            changed_files: self.changed_files,
+            index_dir: self
+                .index
+                .as_ref()
+                .map(|index| index.index_dir().to_path_buf()),
+            note: self.note.clone(),
+        }
+    }
+}
+
+/// Why a repository's index was built again after it vanished.
+fn deleted_note(in_repo: bool) -> String {
+    let mut note = "The index was deleted outside dowse, so it was built again.".to_string();
+    if in_repo {
+        note.push_str(
+            " If cleaning the repository deletes it, keep the index outside the repository instead.",
+        );
+    }
+    note
+}
+
+fn log_move(id: &str, new: &RepoIndex, moved: IndexMove) {
+    let to = index::display_path(new.index_dir());
+    match moved {
+        IndexMove::NothingToMove => {
+            log::info!("{id} has no index to move; it will be built in {to}")
+        }
+        IndexMove::Moved => log::info!("moved the index of {id} to {to}"),
+        IndexMove::AlreadyThere => {
+            log::info!("{id} already had an index in {to}; removed the old one")
+        }
+        IndexMove::Kept(reason) => {
+            log::warn!("kept the index of {id} where it was: {reason}; it will be built in {to}")
         }
     }
 }
