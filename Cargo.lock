@@ -1632,6 +1632,7 @@ dependencies = [
  "notify",
  "rayon",
  "regex",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

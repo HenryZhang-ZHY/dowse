@@ -27,6 +27,7 @@ notify = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"
+semver = { version = "1", features = ["serde"] }
 regex = "1"
 # Only for their highlights queries, which gpui-kit leaves out (see src/ui/highlight.rs).
 tree-sitter-c-sharp = "0.23"
