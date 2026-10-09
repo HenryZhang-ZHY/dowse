@@ -1,0 +1,146 @@
+<p align="right">
+  <a href="../cli.md">English</a> | <strong>简体中文</strong>
+</p>
+
+# 命令行工具参考
+
+`dowse` 命令行通过本地 IPC 通信驱动运行中的 dowse 应用程序。所有子命令均与桌面端共享内存中常驻的 Trigram 热索引及文件系统监听器（File Watcher）。当应用尚未运行时，首条命令会自动在后台静默启动无窗口的守护进程。
+
+- [单实例 IPC 架构](#单实例-ipc-架构)
+- [子命令完整参考](#子命令完整参考)
+  - [检索与状态探测](#检索与状态探测)
+  - [代码仓库管理](#代码仓库管理)
+  - [Trigram 索引管理](#trigram-索引管理)
+  - [后台任务与偏好设置](#后台任务与偏好设置)
+  - [开发者诊断工具](#开发者诊断工具)
+- [面向人与 Agent 的输出设计](#面向人与-agent-的输出设计)
+  - [标准输出（stdout）与标准错误（stderr）严格分离](#标准输出stdout与标准错误stderr严格分离)
+  - [Token 预算控制与紧凑排版](#token-预算控制与紧凑排版)
+  - [流式 JSON 与结构化表格模式](#流式-json-与结构化表格模式)
+- [AI Coding Agent 集成建议](#ai-coding-agent-集成建议)
+
+关于专门针对大模型编程助手的技巧与范式，请参阅 [AI 编码助手指南](agent-guide.md) 或在终端执行 `dowse guide`。关于从终端启动桌面图形界面及工作区配置，请参阅 [桌面应用程序指南](app.md#终端启动方式)。
+
+---
+
+## 单实例 IPC 架构
+
+全部 CLI 子命令均通过系统本地 Socket（Unix 域套接字或 Windows 命名管道）与 dowse 主进程交换数据：
+
+- **共享热索引**：只要桌面程序处于打开状态或后台守护进程正在运行，CLI 查询便无需承担冷启动加载索引的磁盘 I/O 成本。
+- **无头守护进程生命周期**：若桌面程序未启动，CLI 会自动拉起无界面的无头（Headless）守护进程。若连续 **10 分钟** 无任何新的 IPC 请求，该进程将安全自动退出。在生命周期内已打开的仓库索引会持续驻留内存，确保 Agent 或脚本的连续后续查询维持毫秒级响应。
+- **错误提示与容错**：未知参数会导致退出状态码返回 `2`；若子命令输入有误，系统会自动推测并给出最接近的正确命令建议。
+
+---
+
+## 子命令完整参考
+
+### 检索与状态探测
+
+| 子命令 | 功能说明 |
+| --- | --- |
+| `dowse search <query>` | 使用 [搜索语法](search.md) 在所有已注册仓库中执行检索。可通过 `--here`、`-t <tag>` 或 `-W <workspace>` 收窄范围。 |
+| `dowse status` | 查看正在运行的实例状态：打开的窗口、加载的仓库、索引健康度、配置文件目录及活动日志文件路径。 |
+| `dowse guide` | 向标准输出打印完整的 [AI 编码助手集成指南](agent-guide.md)。 |
+| `dowse quit` | 优雅退出当前运行的桌面应用程序或后台守护进程。 |
+
+### 代码仓库管理
+
+| 子命令 | 功能说明 |
+| --- | --- |
+| `dowse repos` | 列出所有已注册仓库的分支、索引状态、文件总数、最近索引时间戳及标签。追加 `--json` 输出结构化数据。 |
+| `dowse repos add <folder>... [-t <tag>]` | 向库中添加单个仓库或遍历添加指定文件夹内的全部子仓库，可选打上标签。 |
+| `dowse repos tag <repo> <tag>... [-r <tag>]` | 为仓库添加新标签，或通过 `-r <tag>` 移除指定标签。 |
+| `dowse repos github [<owner>]` | 通过系统安装的 `gh` CLI 列出指定用户或组织的 GitHub 仓库列表（默认查询当前登录账号）。使用 `-q` 仅输出 `owner/name`。 |
+| `dowse repos clone <owner/name>... [--into <folder>]` | 在后台将仓库克隆至 `<目录>/<所有者>/<仓库名>`。可选参数：`--from <owner>` 批量克隆全部仓库，`--mode shallow\|full` 设定深度，`-t` 打标，`--pull-every 1h` 设定拉取周期，`--wait` 阻塞等待完成。 |
+| `dowse repos pull [<repo>...] [--wait]` | 抓取并安全快进拉取指定仓库。若不带参数则拉取当前范围内的所有仓库（支持 `--here`、`-t`、`-W`）。 |
+| `dowse repos sync <repo>... --every <interval>` | 为仓库配置定时自动拉取周期（如 `15m`、`1h`、`3d`）。传入 `--off` 关闭自动同步。 |
+
+### Trigram 索引管理
+
+| 子命令 | 功能说明 |
+| --- | --- |
+| `dowse index [--wait] [--full]` | 增量更新范围内的仓库索引，仅重编发生改动的文件。传入 `--full` 从所有文件全量重建。 |
+| `dowse repos index-location <repo>... [--repo\|--external\|--default]` | 查看或修改索引存储路径（[仓库内 `.tgrep` 还是外部集中目录](indexes.md#将索引集中存放在仓库外部)），支持自动迁移已有索引文件。传入 `-q` 仅打印纯路径文本，方便直接对接 `tgrep search --index-path`。 |
+
+### 后台任务与偏好设置
+
+| 子命令 | 功能说明 |
+| --- | --- |
+| `dowse tasks [--wait]` | 查看当前后台正在运行或排队的克隆与拉取任务。使用 `dowse tasks cancel <id>...` 或 `--all` 予以终止。 |
+| `dowse settings` | 查看当前持久化保存的全部配置键值对。 |
+| `dowse settings set <key> <value>` | 修改配置项：`index.location`（`repo` 或 `external`）、`index.external-dir`、`tasks.clones`（1 至 16）、`tasks.pulls`（1 至 16）、`updates.check`（`true` 或 `false`）。 |
+| `dowse settings unset <key>` | 将指定配置项恢复为默认值。 |
+
+### 开发者诊断工具
+
+| 子命令 | 功能说明 |
+| --- | --- |
+| `dowse dev logs [-f] [--level <level>]` | 打印应用最近的日志记录。传入 `-f` 实时追踪日志流，`--level debug` 查看详细调试信息。 |
+| `dowse dev metrics` | 打印关键系统监控指标：内存开销、检索耗时、索引构建与更新耗时分布、缓存击中率。 |
+| `dowse dev open` | 打开图形化开发者诊断控制台窗口。 |
+
+---
+
+## 面向人与 Agent 的输出设计
+
+CLI 的输出格式经过了严格设计，力求在人类可读性与自动化程序解析效率之间取得最佳平衡：
+
+### 标准输出（stdout）与标准错误（stderr）严格分离
+- **stdout**：纯粹用于输出查询匹配结果与业务数据载荷。
+- **stderr**：用于输出命中统计、检索耗时、系统状态通知以及收窄建议。
+- **退出状态码（Exit Status）**：
+  - `0`：成功完成且找到了匹配内容。
+  - `1`：成功执行但未找到任何匹配结果。
+  - `2`：参数语法错误、未知选项或执行异常。
+
+### Token 预算控制与紧凑排版
+针对 LLM 上下文窗口及终端屏幕限制，dowse 对输出行数设置了保护性配额：
+- **默认配额预算**：全局最多输出 **100 条匹配行**（`-n`），单文件最多 **20 条匹配行**（`-m`）。传入 `-n 0` 可取消配额上限。
+- **基于 Facet 的收窄建议**：当输出由于超过配额被截断时，stderr 底部会自动基于各维度的 Facet 分布提供具体的收窄限定符建议：
+  ```
+  narrow with: repo:api (120)  language:Rust (80)  path:src/** (64)
+  ```
+- **仅列出文件路径（`-l`）**：仅打印包含命中结果的相对文件路径。非常适合 Agent 在发起深入扫描前作为第一步轻量级探路。
+- **命中计数模式（`-c`）**：在输出路径的同时附带该文件内的命中行数。
+- **上下文代码行（`-C <N>`）**：在命中行前后附带 `N` 行上下文代码（格式为 `line-context`，以此与 `line:match` 区分）。
+- **静默探测模式（`-q`）**：不在 stdout 打印任何内容，直接通过命令退出码判断是否存在命中。
+
+### 流式 JSON 与结构化表格模式
+
+#### 1. 流式换行符分隔 JSON（`--json`）
+每命中一个文件输出一行 JSON 对象，并在流末尾输出一行全局 `summary` 统计摘要：
+
+```json
+{"type":"file","repo":"api","branch":"main","path":"src/config.rs","abs_path":"/src/api/src/config.rs","language":"Rust","matched_lines":2,"lines":[{"line":12,"text":"pub fn parse_config(","match":true,"ranges":[[7,19]]}]}
+{"type":"summary","matched_lines":2,"files":1,"shown_lines":2,"shown_files":1,"searched_files":3,"corpus_files":4120,"repos":5,"unindexed_repos":0,"truncated":false,"elapsed_ms":8.1,"candidates_ms":0.9,"bytes_read":20480,"facets":[]}
+```
+
+#### 2. 结构化表格导出（`--table <format>`）
+将数据按桌面端表格视图排版输出，支持 `csv`、`tsv`、`md`、`json`：
+- 每行对应一条匹配行，涵盖仓库、分支、路径、行号、列号、语言与整行文本。
+- 当搜索语句中包含命名正则捕获组时，每个捕获组会自动形成独立的具名数据列：
+  ```bash
+  dowse search --table csv '/version = "(?<version>[^"]+)"/ path:Cargo.toml'
+  ```
+- 配合 `--stats` 参数可在 stderr 中附带打印 Trigram 索引候选集剪枝效率统计。
+
+---
+
+## AI Coding Agent 集成建议
+
+对于像 Claude Code、Cursor、Copilot 等大模型编码助手，推荐遵循如下检索工作流：
+
+```bash
+# 1. 勘测当前已注册的代码仓库清单
+dowse repos --json
+
+# 2. 粗筛探测：仅列出命中的候选文件路径
+dowse search -l 'parse_config lang:rust'
+
+# 3. 定向提取：带行数配额与上下文的精确查阅
+dowse search -n 20 -C 2 'fn parse_config repo:api'
+
+# 4. 结构化信息抽取：使用表格与正则捕获组直接转成 JSON
+dowse search --table json '/pub fn (?<func>\w+)\(/ lang:rust'
+```

@@ -1,86 +1,163 @@
-# Install and update
+<p align="right">
+  <strong>English</strong> | <a href="zh-CN/install.md">简体中文</a>
+</p>
 
-## Download
+# Installation, Updates, and Configuration
 
-Each [release](https://github.com/HenryZhang-ZHY/dowse/releases/latest) has builds
-ready to run, with their checksums in `SHA256SUMS`:
+- [Pre-Built Binary Packages](#pre-built-binary-packages)
+- [First-Launch System Security Approvals](#first-launch-system-security-approvals)
+- [Setting up PATH](#setting-up-path)
+- [Automatic and Manual Updates](#automatic-and-manual-updates)
+- [Where Configuration and Data Live](#where-configuration-and-data-live)
+- [Building from Source](#building-from-source)
 
-| Platform | Archive | What's in it |
+---
+
+## Pre-Built Binary Packages
+
+Each GitHub [Release](https://github.com/HenryZhang-ZHY/dowse/releases/latest) provides
+pre-compiled release packages verified with published `SHA256SUMS` checksums:
+
+| Platform | Archive Name | Contents and Requirements |
 | --- | --- | --- |
-| Windows (x64) | `dowse-<version>-windows-x86_64.zip` | `dowse.exe`, the app, and `dowse.com`, the command line (see [below](#windows-the-app-and-the-command-line)). Unzip them to a folder, and add it to `PATH` to run `dowse` in a terminal. |
-| macOS 11 or later (Apple silicon and Intel) | `dowse-<version>-macos-universal.zip` | `dowse.app`. Move it to Applications. For the command line, link `/Applications/dowse.app/Contents/MacOS/dowse` into a folder on `PATH`. |
-| Linux (x64, arm64) | `dowse-<version>-linux-<arch>.tar.gz` | `dowse`, both the app and the command line. Needs glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36), X11 or Wayland, and a Vulkan driver. |
+| **Windows (x64)** | `dowse-<version>-windows-x86_64.zip` | Contains `dowse.exe` (GUI application) and `dowse.com` (CLI console client). Unzip to a directory with write permissions. |
+| **macOS 11+** (Apple Silicon / Intel) | `dowse-<version>-macos-universal.zip` | Contains universal `dowse.app`. Move to `/Applications`. |
+| **Linux** (x64 / arm64) | `dowse-<version>-linux-<arch>.tar.gz` | Unified binary serving as both GUI app and CLI. Requires glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+), X11 or Wayland, and a Vulkan driver. |
 
-## The first start
+---
 
-The builds are not signed with a paid certificate, so the system asks once before
-the first start. On Windows, SmartScreen's "Windows protected your PC" has a
-**More info** link, then **Run anyway**. On macOS, open `dowse.app` once, then allow
-it under System Settings > Privacy & Security > **Open Anyway**, or clear the
-quarantine flag the browser set:
+## First-Launch System Security Approvals
 
+Because open-source releases are not signed with a commercial certificate, your operating
+system will display a security warning on initial launch:
+
+### Windows SmartScreen
+When the "Windows protected your PC" dialog appears:
+1. Click **More info**.
+2. Click **Run anyway**.
+
+### macOS Gatekeeper
+1. Launch `dowse.app` once (Gatekeeper will block execution).
+2. Open **System Settings > Privacy & Security**, scroll to the bottom, and click **Open Anyway**.
+3. Alternatively, clear the quarantine attribute set by your browser via terminal:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/dowse.app
+   ```
+
+### Linux Dependencies
+GPUI requires Vulkan and standard windowing libraries:
+- **Ubuntu/Debian**: `sudo apt install libvulkan1 libasound2 libfontconfig1`
+- **Fedora**: `sudo dnf install vulkan-loader alsa-lib fontconfig`
+
+---
+
+## Setting up PATH
+
+### Windows: The .exe and .com Pair
+On Windows, GUI executables (`.exe`) do not attach to or print output within existing
+command-line terminals. dowse solves this by providing a companion console executable,
+`dowse.com`:
+- When you run `dowse` in PowerShell or `cmd.exe`, the operating system prefers `.com`
+  over `.exe`, invoking the console CLI.
+- When you double-click or launch from Explorer, `dowse.exe` runs the desktop GUI.
+- **Setup**: Place both `dowse.exe` and `dowse.com` in a shared folder (e.g. `C:\bin\dowse`)
+  and add that folder to your user or system `PATH`.
+
+### macOS
+Move `dowse.app` to `/Applications`. To make the CLI accessible system-wide:
 ```bash
-xattr -dr com.apple.quarantine /Applications/dowse.app
+sudo ln -sf /Applications/dowse.app/Contents/MacOS/dowse /usr/local/bin/dowse
 ```
 
-## Updates
+### Linux
+Extract the archive and move the `dowse` binary to a directory on your `PATH`:
+```bash
+sudo install -m 755 dowse /usr/local/bin/dowse
+```
 
-Once a day while it runs, dowse asks GitHub for its latest release; a newer one
-shows in the status bar with its release notes. Install downloads this platform's
-archive, checks it against the SHA-256 GitHub keeps for it, makes sure the new
-program starts, and puts it in place of the running one; Restart Now brings the
-same windows back in the new version.
+---
 
-- Help > Check for Updates… asks at once.
-- Skip This Version stops offering one release; the next one is offered again.
-- Help > Check for Updates Automatically, or `dowse settings set updates.check false`,
-  turns the daily question off.
+## Automatic and Manual Updates
 
-An update replaces the programs where they are, so keep them in a folder you can
-write to. When dowse cannot write there (Program Files, say), or macOS runs
-`dowse.app` from a read-only copy because it was never moved to Applications, the
-dialog says so and links the release page instead. Only the builds released on
-GitHub look for updates on their own; one built from source does not.
+Once daily during runtime, dowse queries the GitHub API for newer releases:
+- **Notification**: When an update is detected, a banner appears in the status bar
+  displaying the new version number and release notes.
+- **Verification and In-Place Swap**: Clicking **Install** downloads the matching
+  platform archive, verifies its checksum against the official `SHA256SUMS`, verifies
+  that the new binary executes correctly, and atomically replaces the existing executable.
+- **Seamless Restart**: Clicking **Restart Now** re-opens all existing windows and
+  search tabs in the updated version.
 
-## Build from source
+### Update Controls
+- **Check Manually**: Select **Help > Check for Updates…** to query immediately.
+- **Skip a Release**: Click **Skip This Version** to silence notifications for that
+  release until a newer version is tagged.
+- **Disable Auto-Checks**: Select **Help > Check for Updates Automatically** or run:
+  ```bash
+  dowse settings set updates.check false
+  ```
 
-Requires a recent stable Rust (the repository's `mise.toml` pins `latest`).
+> [!NOTE]
+> Self-updates require write permissions in the directory where dowse is located. If
+> installed into a read-only system path, the update prompt will instead provide a direct
+> link to download the release manually. Builds compiled locally from source do not poll
+> for updates.
 
+---
+
+## Where Configuration and Data Live
+
+All state is preserved in your platform's standard user configuration directory:
+- **Windows**: `%APPDATA%\dowse` (e.g. `C:\Users\<User>\AppData\Roaming\dowse`)
+- **Linux**: `~/.config/dowse`
+- **macOS**: `~/Library/Application Support/dowse`
+
+### Directory Layout
+
+| File / Folder | Contents |
+| --- | --- |
+| `library.json` | Inventory of all registered repositories, assigned tags, and per-repo configurations. |
+| `settings.json` | Persistent application settings (managed via `dowse settings`). |
+| `session.json` | Window positions, open workspaces, active search tabs, and scroll offsets for session restore. |
+| `update.json` | Cache of the latest update check results and skipped release versions. |
+| `workspaces/` | Default storage folder for `.dowse-workspace` files. |
+| `logs/dowse.log` | Active application log. Automatically rotates past 5 MB, archiving the previous log as `dowse.old.log`. Set `DOWSE_LOG=debug` for verbose output. |
+
+To isolate configuration for testing or create a fully portable installation, override
+the path via the `DOWSE_CONFIG_DIR` environment variable:
+```bash
+export DOWSE_CONFIG_DIR="/path/to/custom/dowse-config"
+```
+Each unique configuration directory launches its own independent background daemon.
+
+---
+
+## Building from Source
+
+### Prerequisites
+- A recent stable Rust toolchain (Rust 2024 edition support). The repository's
+  `mise.toml` targets `latest`.
+
+### Compilation Steps
+
+```bash
+# Clone the repository
+git clone https://github.com/HenryZhang-ZHY/dowse.git
+cd dowse
+
+# Build in release mode
+cargo build --release
+```
+
+The resulting binaries are placed in `target/release/`:
+- **macOS / Linux**: `target/release/dowse`
+- **Windows**: `target/release/dowse.exe` and `target/release/dowse-cli.exe`
+  ```powershell
+  # On Windows, copy dowse-cli.exe to dowse.com beside dowse.exe
+  Copy-Item target\release\dowse-cli.exe target\release\dowse.com
+  ```
+
+### Quick Run
 ```bash
 cargo run --release -- path/to/repo path/to/folder-of-repos
 ```
-
-On Linux, GPUI needs the usual X11/Wayland and Vulkan development packages; see the
-[Zed Linux build notes](https://github.com/zed-industries/zed/blob/main/docs/src/development/linux.md).
-
-### Windows: the app and the command line
-
-On Windows the app is a GUI program, which a terminal neither waits for nor shows
-output from. Install the console program Cargo builds as `dowse-cli.exe` next to
-it as `dowse.com`; terminals prefer `.com` to `.exe`, so `dowse` in a terminal runs
-the command line, which hands launches to `dowse.exe`, while Explorer runs the app:
-
-```powershell
-cargo build --release
-Copy-Item target\release\dowse-cli.exe target\release\dowse.com
-```
-
-On macOS and Linux the `dowse` binary is both.
-
-## Where settings live
-
-Settings live under the user configuration directory (`%APPDATA%\dowse` on
-Windows, `~/.config/dowse` on Linux, `~/Library/Application Support/dowse` on
-macOS):
-
-| File | What it holds |
-| --- | --- |
-| `library.json` | Every repository's name, tags and settings. |
-| `settings.json` | The app's settings; `dowse settings` lists them. |
-| `session.json` | The windows to restore and recent workspaces. |
-| `update.json` | What the last look for updates found. |
-| `workspaces/` | Where workspaces are saved unless you pick elsewhere. |
-| `logs/dowse.log` | The log. It starts over past 5 MB, keeping the previous one as `dowse.old.log`; `DOWSE_LOG=debug` records more. |
-
-Set `DOWSE_CONFIG_DIR` to keep settings elsewhere, for a portable install or a test.
-Each settings directory gets its own running app.

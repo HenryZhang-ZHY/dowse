@@ -1,5 +1,7 @@
 # dowse for coding agents
 
+[English](agent-guide.md) | [简体中文](zh-CN/agent-guide.md)
+
 dowse searches every repository its user has added (their own working
 copies, mirrors of their team's repositories, the libraries they depend on)
 in one query, from trigram indexes kept warm by the running app. Use it to
@@ -8,7 +10,7 @@ something, and inside it when `grep` would be slow.
 
 ## The mental model
 
-```
+```bash
 dowse search 'parse_config lang:rust'   # search everything dowse knows
 dowse search --here 'parse_config'      # only the repository you are in
 dowse repos                             # what dowse knows, with tags
@@ -46,8 +48,7 @@ whole query as one regular expression, for patterns pasted from elsewhere.
 - Output is capped at 100 matching lines (`-n` changes it, `-n 0` removes
   it) and 20 per file (`-m`). The footer says how many there were in all.
 - When results are cut, the footer suggests qualifiers that narrow them,
-  with how many files each keeps: `narrow with: repo:api (120)
-  language:Rust (80) path:src/** (64)`. Append one to the query.
+  with how many files each keeps: `narrow with: repo:api (120) language:Rust (80) path:src/** (64)`. Append one to the query.
 - `-l` prints only paths; `-c` paths with counts. Start broad with `-l`, then
   search the files that matter.
 - `-C 2` adds context lines when you need to read around a match.
@@ -81,13 +82,13 @@ they were indexed and tags; `--json` for structured output.
 branch, path, line, column, language, the match and the line. A regex with
 capture groups adds a column per group, which turns a search into data:
 
-```
+```bash
 dowse search --table csv '/version = "(?<version>[^"]+)"/ path:Cargo.toml'
 ```
 
 ## Managing repositories
 
-```
+```bash
 dowse repos add ~/src/api ~/src/web -t dev   # add, tagging them
 dowse repos add ~/mirrors                    # a folder of repositories adds each
 dowse repos tag api owner:alice -r mirror    # add owner:alice, remove mirror
@@ -101,7 +102,7 @@ dowse status                                 # the app, its windows and indexing
 
 Getting code from GitHub (through `gh`, which holds the user's sign-in):
 
-```
+```bash
 dowse repos github my-org -q                 # the org's repositories, names only
 dowse repos clone my-org/api --into ~/mirrors --wait   # clone, add, wait
 dowse repos clone --from my-org --pull-every 1h        # all of them, kept current
