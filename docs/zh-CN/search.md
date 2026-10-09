@@ -18,16 +18,16 @@ dowse 在你输入的同时实时执行搜索。查询语法全面拥抱 GitHub 
 
 ## 查询语法规则
 
-| 语法形态 | 行为说明 | 示例 |
-| --- | --- | --- |
-| `term1 term2` | 检索同时包含两个词项的文件（词项间隐式包含 `AND`）。 | `parse config` |
-| `term1 AND term2` | 显式 `AND` 逻辑。优先级高于 `OR`。 | `parse AND config` |
-| `term1 OR term2` | 检索包含任意一个词项的文件。 | `sqlite OR postgres` |
-| `NOT term` 或 `!term` | 排除包含该词项的文件。 | `NOT test`、`!mock` |
-| `NOT (a OR b)` | 支持通过小括号组合布尔逻辑。 | `config NOT (test OR mock)` |
-| `"exact phrase"` | 精确短语匹配；引号内部使用 `\"` 与 `\\` 转义。 | `"fn main() {"` |
-| `/pattern/` | 逐行匹配正则表达式。 | `/fn \w+_test/` |
-| `content:term` | 将长得像限定符的内容强制作为普通文本处理。 | `content:path:foo` |
+| 语法形态              | 行为说明                                             | 示例                        |
+| --------------------- | ---------------------------------------------------- | --------------------------- |
+| `term1 term2`         | 检索同时包含两个词项的文件（词项间隐式包含 `AND`）。 | `parse config`              |
+| `term1 AND term2`     | 显式 `AND` 逻辑。优先级高于 `OR`。                   | `parse AND config`          |
+| `term1 OR term2`      | 检索包含任意一个词项的文件。                         | `sqlite OR postgres`        |
+| `NOT term` 或 `!term` | 排除包含该词项的文件。                               | `NOT test`、`!mock`         |
+| `NOT (a OR b)`        | 支持通过小括号组合布尔逻辑。                         | `config NOT (test OR mock)` |
+| `"exact phrase"`      | 精确短语匹配；引号内部使用 `\"` 与 `\\` 转义。       | `"fn main() {"`             |
+| `/pattern/`           | 逐行匹配正则表达式。                                 | `/fn \w+_test/`             |
+| `content:term`        | 将长得像限定符的内容强制作为普通文本处理。           | `content:path:foo`          |
 
 > [!NOTE]
 > 查询中的肯定词项会被编译为一个联合正则表达式，用于在展示阶段高亮匹配的代码行。如果一个查询仅由限定符组成（如 `path:*.proto`），dowse 将直接列出所有符合条件的文件，完全无需从磁盘读取文件内容。
@@ -38,16 +38,16 @@ dowse 在你输入的同时实时执行搜索。查询语法全面拥抱 GitHub 
 
 限定符在进入文件正文匹配之前，先对候选文件集合进行快速过滤。包含空格的值可以使用引号包裹（如 `language:"Visual Basic"`），亦可使用正则表达式（如 `path:/src\/(api|web)\//`）。
 
-| 限定符 | 功能说明 | 示例 |
-| --- | --- | --- |
-| `path:<glob\|text>` | 匹配相对文件路径。若模式包含 `/` 则默认锚定自仓库根目录。 | `path:src/*.rs`、`path:engine`、`path:tests/` |
-| `-path:<glob\|text>` | 排除路径符合该模式的文件。 | `-path:tests`、`-path:vendor/` |
-| `language:<lang>` 或 `lang:<lang>` | 按编程语言名称、标准别名或扩展名筛选。 | `language:rust`、`lang:ts`、`lang:python` |
-| `-language:<lang>` 或 `-lang:<lang>` | 排除指定编程语言的文件。 | `-lang:md`、`-lang:json` |
-| `repo:<name>` | 将搜索限制在名称包含指定子串的仓库中。 | `repo:api`、`repo:frontend` |
-| `-repo:<name>` | 排除匹配的仓库。 | `-repo:legacy` |
-| `branch:<name>` | 将搜索限制在当前检出分支符合条件的仓库中。 | `branch:main`、`branch:v2` |
-| `tag:<tag>` | 将搜索限制在被打上指定标签的仓库中。 | `tag:mirror`、`tag:owner:alice` |
+| 限定符                               | 功能说明                                                  | 示例                                          |
+| ------------------------------------ | --------------------------------------------------------- | --------------------------------------------- |
+| `path:<glob\|text>`                  | 匹配相对文件路径。若模式包含 `/` 则默认锚定自仓库根目录。 | `path:src/*.rs`、`path:engine`、`path:tests/` |
+| `-path:<glob\|text>`                 | 排除路径符合该模式的文件。                                | `-path:tests`、`-path:vendor/`                |
+| `language:<lang>` 或 `lang:<lang>`   | 按编程语言名称、标准别名或扩展名筛选。                    | `language:rust`、`lang:ts`、`lang:python`     |
+| `-language:<lang>` 或 `-lang:<lang>` | 排除指定编程语言的文件。                                  | `-lang:md`、`-lang:json`                      |
+| `repo:<name>`                        | 将搜索限制在名称包含指定子串的仓库中。                    | `repo:api`、`repo:frontend`                   |
+| `-repo:<name>`                       | 排除匹配的仓库。                                          | `-repo:legacy`                                |
+| `branch:<name>`                      | 将搜索限制在当前检出分支符合条件的仓库中。                | `branch:main`、`branch:v2`                    |
+| `tag:<tag>`                          | 将搜索限制在被打上指定标签的仓库中。                      | `tag:mirror`、`tag:owner:alice`               |
 
 ---
 
@@ -69,11 +69,11 @@ dowse 在你输入的同时实时执行搜索。查询语法全面拥抱 GitHub 
 
 搜索框右侧提供了三个全局匹配切换开关：
 
-| 快捷键 (Win / Linux) | 快捷键 (macOS) | 开关名称 | 功能说明 |
-| --- | --- | --- | --- |
-| `Alt+C` | `Cmd+Alt+C` | **区分大小写（Match Case）** | 使所有检索词项区分大小写。默认不区分大小写。 |
-| `Alt+W` | `Cmd+Alt+W` | **全字匹配（Whole Word）** | 为词项自动添加词边界标记（`\b`），仅匹配独立的完整标识符。 |
-| `Alt+R` | `Cmd+Alt+R` | **正则模式（Regex Mode）** | 将整个输入框的内容视为单条逐行执行的正则表达式。 |
+| 快捷键 (Win / Linux) | 快捷键 (macOS) | 开关名称                     | 功能说明                                                   |
+| -------------------- | -------------- | ---------------------------- | ---------------------------------------------------------- |
+| `Alt+C`              | `Cmd+Alt+C`    | **区分大小写（Match Case）** | 使所有检索词项区分大小写。默认不区分大小写。               |
+| `Alt+W`              | `Cmd+Alt+W`    | **全字匹配（Whole Word）**   | 为词项自动添加词边界标记（`\b`），仅匹配独立的完整标识符。 |
+| `Alt+R`              | `Cmd+Alt+R`    | **正则模式（Regex Mode）**   | 将整个输入框的内容视为单条逐行执行的正则表达式。           |
 
 ---
 

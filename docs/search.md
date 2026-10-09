@@ -21,16 +21,16 @@ their contents, and displays the matching lines for each.
 
 ## Query Syntax
 
-| Syntax | Behavior | Example |
-| --- | --- | --- |
-| `term1 term2` | Finds files containing all terms (`AND` is implicit). | `parse config` |
-| `term1 AND term2` | Explicit `AND`. Binds tighter than `OR`. | `parse AND config` |
-| `term1 OR term2` | Finds files containing either term. | `sqlite OR postgres` |
-| `NOT term`, `!term` | Excludes files containing the term. | `NOT test`, `!mock` |
-| `NOT (a OR b)` | Groups boolean expressions with parentheses. | `config NOT (test OR mock)` |
-| `"exact phrase"` | Matches exact text; escape with `\"` and `\\`. | `"fn main() {"` |
-| `/pattern/` | Matches a regular expression line by line. | `/fn \w+_test/` |
-| `content:term` | Treats a qualifier-like token as plain text. | `content:path:foo` |
+| Syntax              | Behavior                                              | Example                     |
+| ------------------- | ----------------------------------------------------- | --------------------------- |
+| `term1 term2`       | Finds files containing all terms (`AND` is implicit). | `parse config`              |
+| `term1 AND term2`   | Explicit `AND`. Binds tighter than `OR`.              | `parse AND config`          |
+| `term1 OR term2`    | Finds files containing either term.                   | `sqlite OR postgres`        |
+| `NOT term`, `!term` | Excludes files containing the term.                   | `NOT test`, `!mock`         |
+| `NOT (a OR b)`      | Groups boolean expressions with parentheses.          | `config NOT (test OR mock)` |
+| `"exact phrase"`    | Matches exact text; escape with `\"` and `\\`.        | `"fn main() {"`             |
+| `/pattern/`         | Matches a regular expression line by line.            | `/fn \w+_test/`             |
+| `content:term`      | Treats a qualifier-like token as plain text.          | `content:path:foo`          |
 
 > [!NOTE]
 > Positive terms compile into a combined regular expression that highlights matching
@@ -45,16 +45,16 @@ Qualifiers filter candidate files before content matching begins. Values contain
 spaces can be quoted (e.g. `language:"Visual Basic"`), and regex patterns can be used
 in values (e.g. `path:/src\/(api|web)\//`).
 
-| Qualifier | Description | Examples |
-| --- | --- | --- |
-| `path:<glob\|text>` | Matches against the relative file path. Anchored to root if it contains `/`. | `path:src/*.rs`, `path:engine`, `path:tests/` |
-| `-path:<glob\|text>` | Excludes files whose path matches the pattern. | `-path:tests`, `-path:vendor/` |
-| `language:<lang>` / `lang:<lang>` | Filters by language name, canonical alias, or extension. | `language:rust`, `lang:ts`, `lang:python` |
-| `-language:<lang>` / `-lang:<lang>` | Excludes files of the specified language. | `-lang:md`, `-lang:json` |
-| `repo:<name>` | Restricts search to repositories matching the name substring. | `repo:api`, `repo:frontend` |
-| `-repo:<name>` | Excludes matching repositories. | `-repo:legacy` |
-| `branch:<name>` | Restricts search to repositories with that branch checked out. | `branch:main`, `branch:v2` |
-| `tag:<tag>` | Restricts search to repositories bearing that tag. | `tag:mirror`, `tag:owner:alice` |
+| Qualifier                           | Description                                                                  | Examples                                      |
+| ----------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------- |
+| `path:<glob\|text>`                 | Matches against the relative file path. Anchored to root if it contains `/`. | `path:src/*.rs`, `path:engine`, `path:tests/` |
+| `-path:<glob\|text>`                | Excludes files whose path matches the pattern.                               | `-path:tests`, `-path:vendor/`                |
+| `language:<lang>` / `lang:<lang>`   | Filters by language name, canonical alias, or extension.                     | `language:rust`, `lang:ts`, `lang:python`     |
+| `-language:<lang>` / `-lang:<lang>` | Excludes files of the specified language.                                    | `-lang:md`, `-lang:json`                      |
+| `repo:<name>`                       | Restricts search to repositories matching the name substring.                | `repo:api`, `repo:frontend`                   |
+| `-repo:<name>`                      | Excludes matching repositories.                                              | `-repo:legacy`                                |
+| `branch:<name>`                     | Restricts search to repositories with that branch checked out.               | `branch:main`, `branch:v2`                    |
+| `tag:<tag>`                         | Restricts search to repositories bearing that tag.                           | `tag:mirror`, `tag:owner:alice`               |
 
 ---
 
@@ -77,11 +77,11 @@ trees benefit from the dedicated **Path Filter** box:
 
 Three global matching switches sit beside the search box:
 
-| Shortcut (Win / Linux) | Shortcut (macOS) | Toggle | Description |
-| --- | --- | --- | --- |
-| `Alt+C` | `Cmd+Alt+C` | **Match Case** | Makes all query terms case-sensitive. By default, queries are case-insensitive. |
-| `Alt+W` | `Cmd+Alt+W` | **Whole Word** | Wraps terms in word boundary markers (`\b`), matching complete identifiers only. |
-| `Alt+R` | `Cmd+Alt+R` | **Regex Mode** | Treats the entire search input as a single line-by-line regular expression. |
+| Shortcut (Win / Linux) | Shortcut (macOS) | Toggle         | Description                                                                      |
+| ---------------------- | ---------------- | -------------- | -------------------------------------------------------------------------------- |
+| `Alt+C`                | `Cmd+Alt+C`      | **Match Case** | Makes all query terms case-sensitive. By default, queries are case-insensitive.  |
+| `Alt+W`                | `Cmd+Alt+W`      | **Whole Word** | Wraps terms in word boundary markers (`\b`), matching complete identifiers only. |
+| `Alt+R`                | `Cmd+Alt+R`      | **Regex Mode** | Treats the entire search input as a single line-by-line regular expression.      |
 
 ---
 

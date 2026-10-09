@@ -28,17 +28,17 @@ to stderr. Exit status: 0 found, 1 nothing found, 2 error.
 
 GitHub code search syntax. Terms combine per file, not per line.
 
-| Query | Finds files |
-| --- | --- |
-| `parse config` | containing both; lines with either are shown |
-| `parse OR config` | containing either |
-| `parse NOT test` | containing `parse` but not `test` |
-| `"fn main()"` | containing the exact text (quote it for the shell too) |
-| `/fn \w+_test/` | with a line matching the regular expression |
-| `path:src/*.rs`, `path:engine` | path glob (anchored when it holds a `/`), or text in the path |
-| `language:rust`, `lang:ts` | in the language |
-| `repo:api`, `branch:main`, `tag:owner:alice` | from matching repositories |
-| `-path:tests`, `-lang:md` | not matching |
+| Query                                        | Finds files                                                   |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| `parse config`                               | containing both; lines with either are shown                  |
+| `parse OR config`                            | containing either                                             |
+| `parse NOT test`                             | containing `parse` but not `test`                             |
+| `"fn main()"`                                | containing the exact text (quote it for the shell too)        |
+| `/fn \w+_test/`                              | with a line matching the regular expression                   |
+| `path:src/*.rs`, `path:engine`               | path glob (anchored when it holds a `/`), or text in the path |
+| `language:rust`, `lang:ts`                   | in the language                                               |
+| `repo:api`, `branch:main`, `tag:owner:alice` | from matching repositories                                    |
+| `-path:tests`, `-lang:md`                    | not matching                                                  |
 
 Case is ignored unless you pass `-s`. `-w` matches whole words. `-r` takes the
 whole query as one regular expression, for patterns pasted from elsewhere.

@@ -20,17 +20,17 @@ dowse repos                             # 查看全部仓库及其打标状态
 
 采用 GitHub 代码搜索语法规范。各项条件以**文件**为粒度组合，而非以单行组合。
 
-| 查询语法 | 匹配行为 |
-| --- | --- |
-| `parse config` | 检索同时包含两个词项的文件；两者的命中行均会展示 |
-| `parse OR config` | 检索包含任意一个词项的文件 |
-| `parse NOT test` | 检索包含 `parse` 但不包含 `test` 的文件 |
-| `"fn main()"` | 精确短语匹配（在 Shell 中注意加引号转义） |
-| `/fn \w+_test/` | 逐行匹配正则表达式 |
-| `path:src/*.rs`, `path:engine` | 路径 Glob 通配（包含 `/` 则从根路径锚定），或路径文本匹配 |
-| `language:rust`, `lang:ts` | 按编程语言限定 |
-| `repo:api`, `branch:main`, `tag:owner:alice` | 在满足条件的仓库中检索 |
-| `-path:tests`, `-lang:md` | 排除匹配该限定符的文件 |
+| 查询语法                                     | 匹配行为                                                  |
+| -------------------------------------------- | --------------------------------------------------------- |
+| `parse config`                               | 检索同时包含两个词项的文件；两者的命中行均会展示          |
+| `parse OR config`                            | 检索包含任意一个词项的文件                                |
+| `parse NOT test`                             | 检索包含 `parse` 但不包含 `test` 的文件                   |
+| `"fn main()"`                                | 精确短语匹配（在 Shell 中注意加引号转义）                 |
+| `/fn \w+_test/`                              | 逐行匹配正则表达式                                        |
+| `path:src/*.rs`, `path:engine`               | 路径 Glob 通配（包含 `/` 则从根路径锚定），或路径文本匹配 |
+| `language:rust`, `lang:ts`                   | 按编程语言限定                                            |
+| `repo:api`, `branch:main`, `tag:owner:alice` | 在满足条件的仓库中检索                                    |
+| `-path:tests`, `-lang:md`                    | 排除匹配该限定符的文件                                    |
 
 默认忽略大小写，传入 `-s` 开启大小写敏感。`-w` 开启全字匹配。`-r` 将整条查询视为单条正则表达式，适用于从别处直接粘贴复杂正则。
 

@@ -71,6 +71,7 @@ tgrep search foo --index-path "$(dowse repos index-location api -q)"
 ```
 
 ### Storage Migration Mechanics
+
 - When changing a repository's index location, existing index files are moved on disk
   rather than rebuilt from scratch. If moving across filesystems is disallowed, the
   original is left intact and a new index is constructed at the target path.
@@ -118,6 +119,7 @@ Re-indexing a repository does not require scanning the entire codebase:
 ## Staging Directory and Continuous Search Availability
 
 All index updates and full rebuilds are written into an isolated staging directory:
+
 - Queries can be executed concurrently without locking or interruption while an index
   build or update is underway.
 - Once the new index is fully written and verified, an atomic pointer swap replaces the
@@ -129,9 +131,9 @@ All index updates and full rebuilds are written into an isolated staging directo
 
 Performance metrics on a 245,000-file repository with a 1.7 GB index:
 
-| Operation | Elapsed Time | Note |
-| --- | --- | --- |
-| Full Initial Build | ~9 minutes | Evaluates every file, builds complete trigram posting tables |
-| Incremental Update | ~10 seconds | Re-indexes dirty files and streams postings into new index |
-| Up-to-Date Verification | ~3 seconds | Quick timestamp comparison against index file table |
-| Search Latency | 20–60 ms | Typical round-trip time across warm repositories |
+| Operation               | Elapsed Time | Note                                                         |
+| ----------------------- | ------------ | ------------------------------------------------------------ |
+| Full Initial Build      | ~9 minutes   | Evaluates every file, builds complete trigram posting tables |
+| Incremental Update      | ~10 seconds  | Re-indexes dirty files and streams postings into new index   |
+| Up-to-Date Verification | ~3 seconds   | Quick timestamp comparison against index file table          |
+| Search Latency          | 20–60 ms     | Typical round-trip time across warm repositories             |

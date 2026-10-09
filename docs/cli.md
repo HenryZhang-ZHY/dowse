@@ -48,48 +48,48 @@ local domain socket (Unix) or named pipe (Windows):
 
 ### Search and Inspection
 
-| Command | Description |
-| --- | --- |
+| Command                | Description                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dowse search <query>` | Searches all known repositories using the [query syntax](search.md). Scope can be narrowed using `--here`, `-t <tag>`, or `-W <workspace>`. |
-| `dowse status` | Displays the status of the running app: open windows, loaded repositories, index status, configuration paths, and active log locations. |
-| `dowse guide` | Prints the complete [Guide for Coding Agents](agent-guide.md) to stdout. |
-| `dowse quit` | Gracefully shuts down the running desktop app or headless daemon. |
+| `dowse status`         | Displays the status of the running app: open windows, loaded repositories, index status, configuration paths, and active log locations.     |
+| `dowse guide`          | Prints the complete [Guide for Coding Agents](agent-guide.md) to stdout.                                                                    |
+| `dowse quit`           | Gracefully shuts down the running desktop app or headless daemon.                                                                           |
 
 ### Repository Management
 
-| Command | Description |
-| --- | --- |
-| `dowse repos` | Lists all registered repositories with current branch, index status, file count, last indexed timestamp, and assigned tags. Add `--json` for machine output. |
-| `dowse repos add <folder>... [-t <tag>]` | Adds one or more repositories (or all repositories found within a folder) to the library, optionally assigning tags. |
-| `dowse repos tag <repo> <tag>... [-r <tag>]` | Adds tags to a repository, or removes them via `-r <tag>`. |
-| `dowse repos github [<owner>]` | Lists an owner's GitHub repositories (defaults to authenticated user) via `gh`. Pass `-q` to print only `owner/name`. |
+| Command                                               | Description                                                                                                                                                                                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dowse repos`                                         | Lists all registered repositories with current branch, index status, file count, last indexed timestamp, and assigned tags. Add `--json` for machine output.                                                                                    |
+| `dowse repos add <folder>... [-t <tag>]`              | Adds one or more repositories (or all repositories found within a folder) to the library, optionally assigning tags.                                                                                                                            |
+| `dowse repos tag <repo> <tag>... [-r <tag>]`          | Adds tags to a repository, or removes them via `-r <tag>`.                                                                                                                                                                                      |
+| `dowse repos github [<owner>]`                        | Lists an owner's GitHub repositories (defaults to authenticated user) via `gh`. Pass `-q` to print only `owner/name`.                                                                                                                           |
 | `dowse repos clone <owner/name>... [--into <folder>]` | Clones repositories in the background into `<folder>/<owner>/<name>`. Flags: `--from <owner>` to clone all, `--mode shallow\|full` for clone depth, `-t` for tags, `--pull-every 1h` for scheduled pulls, and `--wait` to block until complete. |
-| `dowse repos pull [<repo>...] [--wait]` | Fetches and safely fast-forwards repositories. Omit arguments to pull everything in scope (`--here`, `-t`, `-W`). |
-| `dowse repos sync <repo>... --every <interval>` | Configures automated scheduled pulls (e.g. `15m`, `1h`, `3d`). Pass `--off` to disable. |
+| `dowse repos pull [<repo>...] [--wait]`               | Fetches and safely fast-forwards repositories. Omit arguments to pull everything in scope (`--here`, `-t`, `-W`).                                                                                                                               |
+| `dowse repos sync <repo>... --every <interval>`       | Configures automated scheduled pulls (e.g. `15m`, `1h`, `3d`). Pass `--off` to disable.                                                                                                                                                         |
 
 ### Index Administration
 
-| Command | Description |
-| --- | --- |
-| `dowse index [--wait] [--full]` | Brings indexes in scope up to date incrementally, reading only modified files. Pass `--full` to rebuild from scratch. |
+| Command                                                                | Description                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dowse index [--wait] [--full]`                                        | Brings indexes in scope up to date incrementally, reading only modified files. Pass `--full` to rebuild from scratch.                                                                                                                            |
 | `dowse repos index-location <repo>... [--repo\|--external\|--default]` | Shows or changes index storage locations ([in-repo `.tgrep` vs centralized external](indexes.md#or-kept-out-of-the-way)), moving index files on the fly. Pass `-q` to print the raw folder path for direct use with `tgrep search --index-path`. |
 
 ### Tasks and Settings
 
-| Command | Description |
-| --- | --- |
-| `dowse tasks [--wait]` | Lists active and queued background clones and pulls. Use `dowse tasks cancel <id>...` or `--all` to abort. |
-| `dowse settings` | Displays all persistent configuration keys and values. |
+| Command                            | Description                                                                                                                                                      |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dowse tasks [--wait]`             | Lists active and queued background clones and pulls. Use `dowse tasks cancel <id>...` or `--all` to abort.                                                       |
+| `dowse settings`                   | Displays all persistent configuration keys and values.                                                                                                           |
 | `dowse settings set <key> <value>` | Updates a setting: `index.location` (`repo` or `external`), `index.external-dir`, `tasks.clones` (1–16), `tasks.pulls` (1–16), `updates.check` (`true`/`false`). |
-| `dowse settings unset <key>` | Resets a configuration key to its default value. |
+| `dowse settings unset <key>`       | Resets a configuration key to its default value.                                                                                                                 |
 
 ### Developer Diagnostics
 
-| Command | Description |
-| --- | --- |
+| Command                                 | Description                                                                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `dowse dev logs [-f] [--level <level>]` | Displays recent application log entries. Pass `-f` to follow live output, or `--level debug` for verbose traces. |
-| `dowse dev metrics` | Prints core performance counters: memory footprint, search timings, index build durations, and cache efficiency. |
-| `dowse dev open` | Opens the graphical developer diagnostics window. |
+| `dowse dev metrics`                     | Prints core performance counters: memory footprint, search timings, index build durations, and cache efficiency. |
+| `dowse dev open`                        | Opens the graphical developer diagnostics window.                                                                |
 
 ---
 
@@ -99,6 +99,7 @@ Output formatting is designed to be as ergonomic for automated agents as it is f
 human terminal users:
 
 ### Standard Output vs Standard Error
+
 - **stdout**: Strictly reserved for query matches and data payloads.
 - **stderr**: Reserved for counts, timings, status notifications, and narrowing advice.
 - **Exit Status**:
@@ -107,7 +108,9 @@ human terminal users:
   - `2`: Syntax error, unknown argument, or runtime failure.
 
 ### Output Budgeting and Formatting
+
 To prevent flooding terminal buffers or exceeding LLM context windows:
+
 - **Default Budget**: Output is capped at **100 matching lines** total (`-n`) and
   **20 lines per file** (`-m`). Pass `-n 0` to uncap.
 - **Narrowing Suggestions**: When results are truncated, the stderr footer suggests
@@ -125,6 +128,7 @@ To prevent flooding terminal buffers or exceeding LLM context windows:
 ### Machine-Readable JSON and Table Modes
 
 #### 1. Streaming JSON (`--json`)
+
 Outputs one newline-delimited JSON (NDJSON) object per matching file, followed by a
 single final `summary` object:
 
@@ -134,7 +138,9 @@ single final `summary` object:
 ```
 
 #### 2. Tabular Output (`--table <format>`)
+
 Formats rows identically to the desktop table view, accepting `csv`, `tsv`, `md`, or `json`:
+
 - Each row represents a matching line with columns for repository, branch, path, line, column, language, and line text.
 - If the search query contains named regex capture groups, each capture group becomes an independent named column:
   ```bash

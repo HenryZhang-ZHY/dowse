@@ -35,13 +35,13 @@ dowse 拥有一款基于 [GPUI](https://github.com/zed-industries/zed)（通过 
 
 通过终端启动 dowse 的参数风格与 VS Code 的 `code` 命令高度一致：
 
-| 命令 | 行为说明 |
-| --- | --- |
-| `dowse` | 恢复上一次会话打开的全部窗口。 |
-| `dowse <folder>...` | 将指定的文件夹作为新的未命名工作区打开。若指定的是包含多个 Git 仓库的父目录，会自动注册其下全部子仓库。 |
-| `dowse <file>.dowse-workspace` | 打开指定的工作区文件；若已有窗口处于打开状态则直接激活并聚焦该窗口。 |
-| `dowse --add <folder>...` | 将指定文件夹追加到当前处于焦点状态的工作区窗口中。 |
-| `dowse --remove <folder>...` | 从当前工作区窗口中移除指定文件夹。 |
+| 命令                           | 行为说明                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `dowse`                        | 恢复上一次会话打开的全部窗口。                                                                          |
+| `dowse <folder>...`            | 将指定的文件夹作为新的未命名工作区打开。若指定的是包含多个 Git 仓库的父目录，会自动注册其下全部子仓库。 |
+| `dowse <file>.dowse-workspace` | 打开指定的工作区文件；若已有窗口处于打开状态则直接激活并聚焦该窗口。                                    |
+| `dowse --add <folder>...`      | 将指定文件夹追加到当前处于焦点状态的工作区窗口中。                                                      |
+| `dowse --remove <folder>...`   | 从当前工作区窗口中移除指定文件夹。                                                                      |
 
 > [!NOTE]
 > dowse 默认保持单实例运行。在应用已启动的情况下再次在终端执行 `dowse`，会将命令行参数通过本地 Socket 发送给后台运行的实例并立刻退出。每个不同的 [配置目录](install.md#配置文件与数据存放位置)（通过 `DOWSE_CONFIG_DIR` 指定）各自维持独立的单实例进程。
@@ -68,6 +68,7 @@ dowse 拥有一款基于 [GPUI](https://github.com/zed-industries/zed)（通过 
 ![仓库管理页面：已克隆仓库列表，展示分支、所有者及镜像标签，以及各个索引包含的文件量](../images/repositories-page.webp)
 
 该页面的核心功能包括：
+
 - **快速筛选**：按名称、本地路径、分支名或标签对仓库进行实时过滤。
 - **批量操作**：勾选单行复选框（或点击表头复选框全选当前筛选出的所有仓库），在表头一键执行批量操作：
   - 批量拉取最新代码（`git pull`）
@@ -140,11 +141,13 @@ dowse 拥有一款基于 [GPUI](https://github.com/zed-industries/zed)（通过 
 dowse 提供代码片段与结构化表格两种展示模式：
 
 ### 1. 代码片段视图（默认）
+
 - 基于 Tree-sitter 语法分析器呈现精准的语法高亮，匹配行附带上下文。
 - 查询关键词与正则命中区域以鲜明主题色着色。
 - 单文件中命中过多时会自动折叠并提示（“展开其余 N 处匹配”）。
 
 ### 2. 表格视图（`Alt+T` / macOS 为 `Cmd+Alt+T`）
+
 - 将命中数据整齐平铺为结构化表格：每行对应一处匹配，包含 `Repository`（仓库）、`Branch`（分支）、`Path`（路径）、`Line`（行号）、`Column`（列号）、`Language`（语言）、`Match`（命中片段）与 `Line Text`（整行内容）。
 - **正则捕获组自动转列**：当搜索模式包含命名捕获组时，每个捕获组会自动解析为独立的排序列：
   ```
@@ -202,25 +205,25 @@ dowse 提供代码片段与结构化表格两种展示模式：
 
 ### 核心快捷键一览
 
-| 快捷键 (Win / Linux) | 快捷键 (macOS) | 说明 |
-| --- | --- | --- |
-| `Ctrl+O` | `Cmd+O` | 添加仓库或包含仓库的父文件夹 |
-| `Ctrl+,` | `Cmd+,` | 打开仓库管理页面 |
-| `Ctrl+F` | `Cmd+F` | 聚焦主搜索输入框 |
-| `Ctrl+P` | `Cmd+P` | 开启/关闭路径漏斗过滤器 |
-| `Alt+T` | `Cmd+Alt+T` | 切换代码片段与表格视图 |
-| `Alt+C` | `Cmd+Alt+C` | 切换区分大小写匹配 |
-| `Alt+W` | `Cmd+Alt+W` | 切换全字匹配 |
-| `Alt+R` | `Cmd+Alt+R` | 切换整句正则表达式模式 |
-| `Ctrl+B` | `Cmd+B` | 显示/隐藏 Facets 侧边栏 |
-| `Ctrl+Alt+B` | `Cmd+Alt+B` | 显示/隐藏右侧文件预览面板 |
-| `Ctrl+T` / `Ctrl+W` | `Cmd+T` / `Cmd+W` | 新建 / 关闭搜索标签页 |
-| `Ctrl+Shift+N` | `Cmd+Shift+N` | 新建工作区窗口 |
-| `Ctrl+Shift+O` / `Ctrl+Shift+S` | `Cmd+Shift+O / S` | 打开 / 保存工作区文件 |
-| `Ctrl+Shift+E` | `Cmd+Shift+E` | 将表格视图数据导出为 CSV 文件 |
-| `Ctrl+Shift+R` | `Cmd+Shift+R` | 增量更新当前范围内的全部仓库索引 |
-| `F4` / `Shift+F4` | `F4` / `Shift+F4` | 跳至下一个 / 上一个命中点 |
-| `Ctrl+Shift+I` / `F12` | `Cmd+Shift+I` / `F12` | 打开开发者工具诊断窗口 |
+| 快捷键 (Win / Linux)            | 快捷键 (macOS)        | 说明                             |
+| ------------------------------- | --------------------- | -------------------------------- |
+| `Ctrl+O`                        | `Cmd+O`               | 添加仓库或包含仓库的父文件夹     |
+| `Ctrl+,`                        | `Cmd+,`               | 打开仓库管理页面                 |
+| `Ctrl+F`                        | `Cmd+F`               | 聚焦主搜索输入框                 |
+| `Ctrl+P`                        | `Cmd+P`               | 开启/关闭路径漏斗过滤器          |
+| `Alt+T`                         | `Cmd+Alt+T`           | 切换代码片段与表格视图           |
+| `Alt+C`                         | `Cmd+Alt+C`           | 切换区分大小写匹配               |
+| `Alt+W`                         | `Cmd+Alt+W`           | 切换全字匹配                     |
+| `Alt+R`                         | `Cmd+Alt+R`           | 切换整句正则表达式模式           |
+| `Ctrl+B`                        | `Cmd+B`               | 显示/隐藏 Facets 侧边栏          |
+| `Ctrl+Alt+B`                    | `Cmd+Alt+B`           | 显示/隐藏右侧文件预览面板        |
+| `Ctrl+T` / `Ctrl+W`             | `Cmd+T` / `Cmd+W`     | 新建 / 关闭搜索标签页            |
+| `Ctrl+Shift+N`                  | `Cmd+Shift+N`         | 新建工作区窗口                   |
+| `Ctrl+Shift+O` / `Ctrl+Shift+S` | `Cmd+Shift+O / S`     | 打开 / 保存工作区文件            |
+| `Ctrl+Shift+E`                  | `Cmd+Shift+E`         | 将表格视图数据导出为 CSV 文件    |
+| `Ctrl+Shift+R`                  | `Cmd+Shift+R`         | 增量更新当前范围内的全部仓库索引 |
+| `F4` / `Shift+F4`               | `F4` / `Shift+F4`     | 跳至下一个 / 上一个命中点        |
+| `Ctrl+Shift+I` / `F12`          | `Cmd+Shift+I` / `F12` | 打开开发者工具诊断窗口           |
 
 ---
 

@@ -1,2 +1,11 @@
 [tools]
+"npm:oxfmt" = "latest"
 rust = "latest"
+
+[tasks."fmt:check"]
+description = "Check Markdown and MDX formatting"
+run = 'oxfmt --check **/*.{md,mdx}'
+
+[tasks.fmt]
+description = "Format Markdown and MDX files"
+run = 'oxfmt --write **/*.{md,mdx}'
