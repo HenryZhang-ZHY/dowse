@@ -655,7 +655,7 @@ impl DevTools {
 }
 
 impl Render for DevTools {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
             Page::Logs => self.render_logs(cx).into_any_element(),
             Page::Metrics => self.render_metrics(cx).into_any_element(),
@@ -672,7 +672,6 @@ impl Render for DevTools {
             .text_color(theme.foreground)
             .child(self.render_header(cx))
             .child(body)
-            .children(Root::render_notification_layer(window, cx))
     }
 }
 

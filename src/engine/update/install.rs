@@ -222,6 +222,11 @@ pub fn install(
     result
 }
 
+/// Lowercase hex, which `sha2` digests no longer format themselves.
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// The archive's SHA-256: from GitHub's digest, or the release's checksums.
 fn expected_sha256(client: &Client, release: &Release, asset: &Asset) -> Result<String> {
     if let Some(sha256) = &asset.sha256 {
@@ -289,7 +294,7 @@ pub fn download(
         }
         out.flush()?;
         progress(Progress::Downloading { done, total });
-        let actual = format!("{:x}", hasher.finalize());
+        let actual = to_hex(&hasher.finalize());
         if actual != sha256 {
             bail!(
                 "{} is not what was released: its SHA-256 is {actual}, not {sha256}",
@@ -507,7 +512,7 @@ mod tests {
     }
 
     fn sha256(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        to_hex(&Sha256::digest(bytes))
     }
 
     fn zip_of(files: &[(&str, &str, u32)]) -> Vec<u8> {
