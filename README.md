@@ -1,13 +1,17 @@
-<p align="right">
-  <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
-</p>
+<div align="center">
 
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/dowse-wordmark-dark.svg">
-    <img alt="dowse" src="docs/brand/dowse-wordmark-light.svg" height="48">
+    <img alt="dowse" src="docs/brand/dowse-wordmark-light.svg" height="56">
   </picture>
 </h1>
+
+<p><strong>Search every repository on your disk at once</strong></p>
+
+<p><strong>English</strong> &nbsp;·&nbsp; <a href="README.zh-CN.md">简体中文</a></p>
+
+</div>
 
 Search code across many repositories at once, from a desktop app or the command
 line, in the spirit of [grep.app](https://grep.app) and GitHub code search, but over

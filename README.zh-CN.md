@@ -1,13 +1,17 @@
-<p align="right">
-  <a href="README.md">English</a> | <strong>简体中文</strong>
-</p>
+<div align="center">
 
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/dowse-wordmark-dark.svg">
-    <img alt="dowse" src="docs/brand/dowse-wordmark-light.svg" height="48">
+    <img alt="dowse" src="docs/brand/dowse-wordmark-light.svg" height="56">
   </picture>
 </h1>
+
+<p><strong>一次搜索你磁盘上的所有代码仓库</strong></p>
+
+<p><a href="README.md">English</a> &nbsp;·&nbsp; <strong>简体中文</strong></p>
+
+</div>
 
 面向本地多代码仓库的高性能代码搜索工具。支持桌面应用与命令行两种交互形态，拥有类似 [grep.app](https://grep.app) 和 GitHub 代码搜索的极速体验，但完全基于你本地磁盘上的代码副本运行——无论是常驻在 `main` 分支的团队镜像仓库，还是正在活跃开发的多个工作副本。底层以 [tgrep](https://github.com/microsoft/tgrep) 的 Trigram（三元语法）索引为核心检索引掣，并通过 [GPUI](https://github.com/zed-industries/zed)（基于 [GPUI Kit](https://gpui-kit.com)）提供 GPU 加速的高响应度界面。
 
