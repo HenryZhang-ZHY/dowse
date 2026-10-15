@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../README.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../README.md">English</a> · <strong>简体中文</strong></sub>
 
 # dowse 文档中心
 

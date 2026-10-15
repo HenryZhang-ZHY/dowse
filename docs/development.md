@@ -1,6 +1,4 @@
-<p align="right">
-  <strong>English</strong> | <a href="zh-CN/development.md">简体中文</a>
-</p>
+<sub><strong>English</strong> · <a href="zh-CN/development.md">简体中文</a></sub>
 
 # Architecture, Contributing, and Release Workflow
 

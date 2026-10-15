@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../cli.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../cli.md">English</a> · <strong>简体中文</strong></sub>
 
 # 命令行工具参考
 

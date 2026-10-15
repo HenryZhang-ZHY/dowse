@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../search.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../search.md">English</a> · <strong>简体中文</strong></sub>
 
 # 搜索语法与执行引擎
 

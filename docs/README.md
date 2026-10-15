@@ -1,6 +1,4 @@
-<p align="right">
-  <strong>English</strong> | <a href="zh-CN/README.md">简体中文</a>
-</p>
+<sub><strong>English</strong> · <a href="zh-CN/README.md">简体中文</a></sub>
 
 # dowse Documentation Hub
 

@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../indexes.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../indexes.md">English</a> · <strong>简体中文</strong></sub>
 
 # Trigram 索引架构与生命周期
 

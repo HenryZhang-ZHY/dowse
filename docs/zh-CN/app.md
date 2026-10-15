@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../app.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../app.md">English</a> · <strong>简体中文</strong></sub>
 
 # 桌面应用程序指南
 

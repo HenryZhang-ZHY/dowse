@@ -1,6 +1,4 @@
-<p align="right">
-  <a href="../development.md">English</a> | <strong>简体中文</strong>
-</p>
+<sub><a href="../development.md">English</a> · <strong>简体中文</strong></sub>
 
 # 架构设计、贡献开发与发布流程
 
